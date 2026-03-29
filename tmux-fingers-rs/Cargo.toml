@@ -1,0 +1,15 @@
+[package]
+name = "tmux-fingers-rs"
+version = "2.6.2"
+edition = "2024"
+
+[[bin]]
+name = "tmux-fingers"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+pcre2 = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+shell-words = "1"
