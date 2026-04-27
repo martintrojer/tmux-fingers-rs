@@ -12,6 +12,24 @@ fn unique_name(prefix: &str) -> String {
     format!("{prefix}-{}-{nanos}", std::process::id())
 }
 
+/// Returns a short, unique base directory for per-test state.
+///
+/// We deliberately avoid `std::env::temp_dir()` here. On macOS that resolves
+/// to a long `/var/folders/...` path, and the resulting unix socket path
+/// (`<state>/tmux-fingers/tmux-0000/fingers.sock`) easily exceeds the
+/// 104-byte `SUN_LEN` limit, causing tmux to fail with
+/// `path must be shorter than SUN_LEN`.
+fn short_state_home() -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    // Keep the prefix tiny so the full socket path stays well under 104 bytes.
+    // e.g. /tmp/tf-<pid>-<nanos-suffix>
+    let suffix = (nanos % 1_000_000) as u32;
+    PathBuf::from("/tmp").join(format!("tf-{}-{suffix:06}", std::process::id()))
+}
+
 fn tmux(socket: &str, args: &[&str]) -> String {
     let output = Command::new("tmux")
         .arg("-L")
@@ -123,7 +141,7 @@ fn cleanup(socket: &str, mut client: Child, state_home: &Path) {
 fn load_config_and_start_work_against_live_tmux() {
     let socket = unique_name("tmux-fingers-rs");
     let session = unique_name("session");
-    let state_home = std::env::temp_dir().join(unique_name("tmux-fingers-rs-state"));
+    let state_home = short_state_home();
     fs::create_dir_all(&state_home).unwrap();
 
     setup_server(&socket, &session, "printf '12345\n'; exec cat");
@@ -196,7 +214,7 @@ fn load_config_and_start_work_against_live_tmux() {
 fn multimode_selects_multiple_matches() {
     let socket = unique_name("tmux-fingers-rs");
     let session = unique_name("session");
-    let state_home = std::env::temp_dir().join(unique_name("tmux-fingers-rs-state"));
+    let state_home = short_state_home();
     fs::create_dir_all(&state_home).unwrap();
 
     setup_server(&socket, &session, "printf '12345 67890\n'; exec cat");
@@ -267,7 +285,7 @@ fn multimode_selects_multiple_matches() {
 fn jump_mode_enters_copy_mode_on_selection() {
     let socket = unique_name("tmux-fingers-rs");
     let session = unique_name("session");
-    let state_home = std::env::temp_dir().join(unique_name("tmux-fingers-rs-state"));
+    let state_home = short_state_home();
     fs::create_dir_all(&state_home).unwrap();
 
     setup_server(&socket, &session, "printf '12345\n'; exec cat");
@@ -346,7 +364,7 @@ fn jump_mode_enters_copy_mode_on_selection() {
 fn custom_pattern_is_loaded_and_selected() {
     let socket = unique_name("tmux-fingers-rs");
     let session = unique_name("session");
-    let state_home = std::env::temp_dir().join(unique_name("tmux-fingers-rs-state"));
+    let state_home = short_state_home();
     fs::create_dir_all(&state_home).unwrap();
 
     setup_server(
@@ -418,7 +436,7 @@ fn custom_pattern_is_loaded_and_selected() {
 fn paste_action_pastes_match_into_pane() {
     let socket = unique_name("tmux-fingers-rs");
     let session = unique_name("session");
-    let state_home = std::env::temp_dir().join(unique_name("tmux-fingers-rs-state"));
+    let state_home = short_state_home();
     fs::create_dir_all(&state_home).unwrap();
 
     setup_server(&socket, &session, "printf '12345\n'; exec cat");
@@ -495,7 +513,7 @@ fn paste_action_pastes_match_into_pane() {
 fn custom_shell_action_receives_match_on_stdin() {
     let socket = unique_name("tmux-fingers-rs");
     let session = unique_name("session");
-    let state_home = std::env::temp_dir().join(unique_name("tmux-fingers-rs-state"));
+    let state_home = short_state_home();
     fs::create_dir_all(&state_home).unwrap();
     let output_path = state_home.join("action-output.txt");
 
@@ -573,7 +591,7 @@ fn custom_shell_action_receives_match_on_stdin() {
 fn failed_start_still_restores_tmux_state() {
     let socket = unique_name("tmux-fingers-rs");
     let session = unique_name("session");
-    let state_home = std::env::temp_dir().join(unique_name("tmux-fingers-rs-state"));
+    let state_home = short_state_home();
     fs::create_dir_all(&state_home).unwrap();
 
     setup_server(&socket, &session, "printf '12345\n'; exec cat");
