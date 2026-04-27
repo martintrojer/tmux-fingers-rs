@@ -1,45 +1,91 @@
 # AGENTS
 
+Notes for AI / automation agents working in this repository.
+
 ## Scope
 
-This folder contains the Rust port of `tmux-fingers`. Treat the Crystal implementation in the parent repo as the behavior reference unless there is a deliberate compatibility decision recorded in code or docs.
+This is the Rust port of [Morantron/tmux-fingers][upstream]. Treat the
+upstream Crystal implementation as the behavior reference unless there
+is a deliberate compatibility decision recorded in code or docs. The
+upstream sources are available on the `upstream-crystal` branch of this
+repo (see the README's "Tracking upstream" section).
+
+[upstream]: https://github.com/Morantron/tmux-fingers
 
 ## Priorities
 
-1. Preserve plugin-facing compatibility.
-2. Prefer behavior parity over stylistic rewrites.
+1. Preserve plugin-facing behavior (matching, hint assignment, action
+   semantics) so users migrating from upstream are not surprised.
+2. Prefer behavior parity with upstream over stylistic rewrites.
 3. Keep tmux-dependent behavior covered by tests whenever practical.
 
-## Important Contracts
+## Naming
 
-The tmux plugin depends primarily on:
-- `tmux-fingers version` returning the expected version string
-- `tmux-fingers load-config` installing bindings and setting `@fingers-cli`
-- `tmux-fingers start` working on real tmux panes
-- `tmux-fingers send-input` remaining callable by bindings
+- Binary name: **`tmux-fingers-rs`** (so it can coexist with upstream's
+  `tmux-fingers` on the same `$PATH` and TPM config).
+- Plugin entrypoint: `tmux-fingers-rs.tmux`.
+- Crate: `tmux-fingers-rs` (published to crates.io).
+- The string `tmux-fingers` (without `-rs`) should appear only when
+  referring to the upstream project, in legitimate test fixtures, or in
+  internal log/error prefixes that have already been updated to
+  `[tmux-fingers-rs]`.
 
-Help formatting and `info` presentation are secondary unless they affect plugin flow.
+## Important contracts
 
-## Working Rules
+The plugin script (`tmux-fingers-rs.tmux`) depends on:
 
-- Use the binary name `tmux-fingers`, not `tmux-fingers-rs`, for compatibility work.
-- Keep `cargo fmt`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test` passing.
-- Prefer extending existing live tmux tests over adding unverified runtime logic.
-- When changing action execution or tmux command construction, assume socket handling matters.
+- `tmux-fingers-rs version` returning a version string that matches
+  the `version = ` line in `Cargo.toml`.
+- `tmux-fingers-rs load-config` installing bindings and setting
+  `@fingers-cli`.
+- `tmux-fingers-rs start <pane-id>` working against a real tmux pane.
+- The hidden `tmux-fingers-rs send-input` remaining callable by
+  generated bindings.
+
+Help formatting and `info` presentation are secondary unless they affect
+plugin flow.
+
+## Working rules
+
+- Keep `cargo fmt --all -- --check`, `cargo clippy --all-targets
+  --all-features -- -D warnings`, and `cargo test --lib --bins --test
+  compliance` green. CI runs all three.
+- The `live_tmux` integration suite spawns real tmux servers; it is not
+  in CI and should be exercised locally before behavior-affecting
+  changes.
+- Prefer extending existing live tmux tests over adding unverified
+  runtime logic.
+- When changing action execution or tmux command construction, assume
+  socket handling matters (see `src/fingers/input_socket.rs` and the
+  socket-path notes in `tests/live_tmux.rs`).
 - Do not weaken live tmux assertions to hide real runtime mismatches.
 
-## Where To Look First
+## Where to look first
 
-- CLI: `src/cli.rs`
-- tmux wrapper: `src/tmux.rs`
-- runtime flow: `src/fingers/start.rs`
-- config loading and bindings: `src/fingers/load_config.rs`
-- action execution: `src/fingers/action_runner.rs`
+- CLI:                       `src/cli.rs`
+- tmux wrapper:              `src/tmux.rs`
+- runtime flow:              `src/fingers/start.rs`
+- config + bindings:         `src/fingers/load_config.rs`
+- action execution:          `src/fingers/action_runner.rs`
 - live integration coverage: `tests/live_tmux.rs`
+- plugin entrypoint:         `tmux-fingers-rs.tmux`
+- installer:                 `install-wizard.sh`
 
-## Common Next Work
+## Porting workflow
 
-- Match Crystal `info` output more closely
-- Add live coverage for `:open:`
-- Add release/static build documentation
-- Compare more directly against the installed Crystal binary when changing plugin-facing behavior
+When upstream Crystal changes, port them on a branch off `main` with a
+commit subject of the form:
+
+```
+Port: <upstream subject> (upstream <short-sha>)
+```
+
+The full workflow is documented in the README under "Tracking upstream".
+
+## Common next work
+
+- Match upstream `info` output more closely.
+- Add live coverage for `:open:`.
+- Document release/static-build process for `cargo install` and TPM
+  consumers.
+- Add a release workflow under `.github/workflows/` (currently CI-only).

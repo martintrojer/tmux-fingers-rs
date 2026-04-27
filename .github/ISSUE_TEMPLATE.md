@@ -11,15 +11,15 @@ Please search existing issues before opening a new one.
 
 ### Reproduction
 
-<!-- Minimal steps to reproduce. A snippet of pane content + the tmux-fingers
+<!-- Minimal steps to reproduce. A snippet of pane content + the tmux-fingers-rs
      command you invoked is usually enough. -->
 
-### tmux-fingers info output
+### tmux-fingers-rs info output
 
 <!-- Output of:
        tmux run "#{@fingers-cli} info"
      or, when running the binary directly:
-       tmux-fingers info
+       tmux-fingers-rs info
 -->
 
 ```
@@ -27,7 +27,7 @@ Please search existing issues before opening a new one.
 
 ### Environment
 
-- `tmux-fingers --version`:
+- `tmux-fingers-rs --version`:
 - `tmux -V`:
 - `rustc --version` (only if you built from source):
 - OS / version:
