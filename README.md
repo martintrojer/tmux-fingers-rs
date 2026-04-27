@@ -118,9 +118,10 @@ names are unchanged from upstream; see the
 [upstream README](https://github.com/Morantron/tmux-fingers#configuration)
 for the full list.
 
-> **Compatibility note.** Some details still differ from the Crystal
-> binary, notably `tmux-fingers-rs info` output formatting. File an
-> issue if you hit a difference that breaks your workflow.
+> **Compatibility note.** Behavior is intended to match upstream; a
+> hand-audited list of known differences (and confirmed non-differences)
+> lives in [`docs/gaps-vs-upstream.md`](./docs/gaps-vs-upstream.md). File
+> an issue if you hit a difference not listed there.
 
 ---
 
