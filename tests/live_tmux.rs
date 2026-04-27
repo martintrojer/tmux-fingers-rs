@@ -16,7 +16,7 @@ fn unique_name(prefix: &str) -> String {
 ///
 /// We deliberately avoid `std::env::temp_dir()` here. On macOS that resolves
 /// to a long `/var/folders/...` path, and the resulting unix socket path
-/// (`<state>/tmux-fingers/tmux-0000/fingers.sock`) easily exceeds the
+/// (`<state>/tmux-fingers-rs/tmux-0000/fingers.sock`) easily exceeds the
 /// 104-byte `SUN_LEN` limit, causing tmux to fail with
 /// `path must be shorter than SUN_LEN`.
 fn short_state_home() -> PathBuf {
@@ -46,14 +46,14 @@ fn tmux(socket: &str, args: &[&str]) -> String {
 }
 
 fn binary() -> PathBuf {
-    if let Some(path) = std::env::var_os("CARGO_BIN_EXE_tmux-fingers") {
+    if let Some(path) = std::env::var_os("CARGO_BIN_EXE_tmux-fingers-rs") {
         return PathBuf::from(path);
     }
 
     let exe = std::env::current_exe().expect("current exe");
     exe.parent()
         .and_then(Path::parent)
-        .map(|dir| dir.join("tmux-fingers"))
+        .map(|dir| dir.join("tmux-fingers-rs"))
         .expect("compiled binary path")
 }
 
@@ -111,7 +111,7 @@ fn run_load_config(bin: &Path, state_home: &Path, socket: &str) {
 
 fn socket_path(state_home: &Path) -> PathBuf {
     state_home
-        .join("tmux-fingers")
+        .join("tmux-fingers-rs")
         .join("tmux-0000")
         .join("fingers.sock")
 }

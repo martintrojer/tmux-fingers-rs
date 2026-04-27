@@ -109,7 +109,7 @@ pub fn validate_options(option_names: &[String], tmux: &Tmux) -> Result<(), Stri
         return Ok(());
     }
 
-    let mut msg = String::from("[tmux-fingers] Errors found in tmux.conf:\n");
+    let mut msg = String::from("[tmux-fingers-rs] Errors found in tmux.conf:\n");
     for error in errors {
         msg.push_str("  - ");
         msg.push_str(&error);
@@ -233,9 +233,9 @@ fn option_to_method(option: &str) -> String {
 }
 
 fn check_pattern(pattern: &str) -> Result<(), String> {
-    Regex::new(pattern)
-        .map(|_| ())
-        .map_err(|err| format!("[tmux-fingers] Invalid pattern: {pattern}\n[tmux-fingers] {err}"))
+    Regex::new(pattern).map(|_| ()).map_err(|err| {
+        format!("[tmux-fingers-rs] Invalid pattern: {pattern}\n[tmux-fingers-rs] {err}")
+    })
 }
 
 #[cfg(test)]

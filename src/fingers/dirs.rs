@@ -31,9 +31,9 @@ pub fn ensure_folders() -> std::io::Result<()> {
 
 fn state_root() -> PathBuf {
     if let Ok(path) = env::var("XDG_STATE_HOME") {
-        return PathBuf::from(path).join("tmux-fingers");
+        return PathBuf::from(path).join("tmux-fingers-rs");
     }
 
     let home = env::var("HOME").unwrap_or_else(|_| ".".into());
-    PathBuf::from(home).join(".local/state/tmux-fingers")
+    PathBuf::from(home).join(".local/state/tmux-fingers-rs")
 }

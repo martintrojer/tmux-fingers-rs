@@ -2,9 +2,17 @@
 name = "tmux-fingers-rs"
 version = "2.6.2"
 edition = "2024"
+description = "Rust port of tmux-fingers: copy text from a tmux pane using letter hints."
+license = "MIT"
+repository = "https://github.com/martintrojer/tmux-fingers-rs"
+homepage = "https://github.com/martintrojer/tmux-fingers-rs"
+readme = "README.md"
+keywords = ["tmux", "tmux-plugin", "clipboard", "hints", "vimium"]
+categories = ["command-line-utilities"]
+rust-version = "1.85"
 
 [[bin]]
-name = "tmux-fingers"
+name = "tmux-fingers-rs"
 path = "src/main.rs"
 
 [dependencies]

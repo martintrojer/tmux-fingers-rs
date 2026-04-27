@@ -9,8 +9,8 @@ use crate::tmux::Tmux;
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "tmux-fingers",
-    bin_name = "tmux-fingers",
+    name = "tmux-fingers-rs",
+    bin_name = "tmux-fingers-rs",
     version,
     about = "description"
 )]
@@ -29,7 +29,7 @@ enum Command {
     LoadConfig,
     #[command(hide = true)]
     SendInput(SendInputArgs),
-    #[command(about = "Start tmux-fingers on a pane")]
+    #[command(about = "Start tmux-fingers-rs on a pane")]
     Start(StartArgs),
 }
 

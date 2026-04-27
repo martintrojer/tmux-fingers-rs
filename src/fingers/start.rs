@@ -222,7 +222,7 @@ fn patterns_from_options(
                 result.push(pattern.clone());
             } else {
                 tmux.display_message(
-                    &format!("[tmux-fingers] error: Unknown pattern {name}"),
+                    &format!("[tmux-fingers-rs] error: Unknown pattern {name}"),
                     5000,
                 )?;
                 return Err(format!("Unknown pattern {name}"));
