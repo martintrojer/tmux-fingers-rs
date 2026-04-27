@@ -17,8 +17,6 @@ Crystal `tmux-fingers`.
 
 ## Install
 
-All install paths require [Rust / cargo](https://rustup.rs).
-
 ### Option A — TPM (recommended)
 
 Add to your `~/.tmux.conf`:
@@ -29,21 +27,51 @@ set -g @plugin 'martintrojer/tmux-fingers-rs'
 
 Then <kbd>prefix</kbd> + <kbd>I</kbd> to fetch & source the plugin.
 
-The first time it runs, a wizard pops up offering three install methods:
+The first time it runs, a wizard pops up offering four install methods:
 
-1. **Install from crates.io** — `cargo install tmux-fingers-rs` (puts the
-   binary in `~/.cargo/bin/`; needs `~/.cargo/bin` on your `$PATH`).
-2. **Build locally into `./bin`** — TPM-friendly, no global install. The
+1. **Download prebuilt binary** *(recommended, no Rust required)* —
+   downloads the right release asset from GitHub, verifies its SHA256,
+   and drops it in `~/.tmux/plugins/tmux-fingers-rs/bin/`. Available for
+   Linux x86_64 and Apple Silicon macOS.
+2. **Install from crates.io** — `cargo install tmux-fingers-rs` (puts the
+   binary in `~/.cargo/bin/`; needs `~/.cargo/bin` on your `$PATH` and a
+   Rust toolchain).
+3. **Build locally into `./bin`** — TPM-friendly, no global install. The
    binary stays inside `~/.tmux/plugins/tmux-fingers-rs/bin/` and the
-   plugin script picks it up automatically.
-3. **Install from this checkout** — `cargo install --path .` against the
-   cloned plugin directory.
+   plugin script picks it up automatically. Needs Rust.
+4. **Install from this checkout** — `cargo install --path .` against the
+   cloned plugin directory. Needs Rust.
 
 Pick whichever fits your setup. If you upgrade the plugin (TPM <kbd>U</kbd>)
 and the binary version no longer matches `Cargo.toml`, the wizard pops up
 again to rebuild — set `@fingers-skip-wizard 1` to suppress this.
 
-### Option B — From crates.io directly
+### Option B — Prebuilt binary, no plugin manager
+
+Grab the appropriate `.tar.gz` from the
+[latest release](https://github.com/martintrojer/tmux-fingers-rs/releases/latest):
+
+- `tmux-fingers-rs-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz` — Linux x86_64
+- `tmux-fingers-rs-vX.Y.Z-aarch64-apple-darwin.tar.gz` — Apple Silicon macOS
+
+Verify, extract, and put the binary on your `$PATH`:
+
+```sh
+tar -xzf tmux-fingers-rs-*.tar.gz
+sudo install tmux-fingers-rs-*/tmux-fingers-rs /usr/local/bin/
+```
+
+Then in `~/.tmux.conf`:
+
+```tmux
+run-shell ~/path/to/tmux-fingers-rs/tmux-fingers-rs.tmux
+```
+
+or use TPM (Option A) and the plugin will pick the binary up from `$PATH`.
+
+### Option C — From crates.io directly
+
+Requires [Rust / cargo](https://rustup.rs):
 
 ```sh
 cargo install tmux-fingers-rs
@@ -53,7 +81,9 @@ Then add the plugin entrypoint to your `~/.tmux.conf` manually (or use
 TPM as above; the binary on `$PATH` will be used and the wizard will
 not run).
 
-### Option C — Manual / from source
+### Option D — Manual / from source
+
+Requires [Rust / cargo](https://rustup.rs):
 
 ```sh
 git clone https://github.com/martintrojer/tmux-fingers-rs ~/.tmux/plugins/tmux-fingers-rs
@@ -97,7 +127,9 @@ for the full list.
 ## Requirements
 
 - tmux 3.0 or newer
-- Rust 1.85+ (for `edition = "2024"`)
+- For prebuilt binaries: nothing else (Linux x86_64 or Apple Silicon macOS).
+- For building from source / `cargo install`: Rust 1.95+ (pinned via
+  `rust-toolchain.toml`).
 
 ---
 
@@ -136,6 +168,45 @@ cargo test --test live_tmux
 ```
 
 ---
+
+## Releasing
+
+Releases are driven by git tags. Pushing a tag of the form `vX.Y.Z`
+triggers `.github/workflows/release.yml`, which:
+
+- builds release binaries on `ubuntu-latest` (`x86_64-unknown-linux-gnu`)
+  and `macos-latest` (`aarch64-apple-darwin`)
+- packages each binary with `README.md`, `LICENSE`, the plugin script and
+  the install wizard into a `.tar.gz` plus a `.sha256` sidecar
+- creates the GitHub Release and uploads all artifacts
+
+Publishing to crates.io is intentionally a separate manual step so that
+it stays under explicit control:
+
+```sh
+# 0. Pre-flight
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --lib --bins --test compliance
+
+# 1. Push main, wait for CI to go green
+git push origin main
+
+# 2. Dry-run the crates.io package
+cargo publish --dry-run
+
+# 3. Tag and push (this triggers the release workflow)
+git tag -a v0.1.0 -m "v0.1.0"
+git push origin v0.1.0
+
+# 4. Once the release workflow is green and the GitHub Release exists,
+#    publish to crates.io. This is irrevocable.
+cargo publish
+```
+
+If something goes wrong after `cargo publish`, you can `cargo yank
+--version X.Y.Z` (hides the version from new resolves) and release a
+patched `X.Y.Z+1`. You cannot re-upload the same version number.
 
 ## Tracking upstream
 

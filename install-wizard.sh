@@ -6,6 +6,8 @@
 # the user directly with one of the action arguments below.
 #
 # Actions (passed as $1):
+#   download-binary        download a prebuilt release binary from GitHub
+#                          Releases (no Rust toolchain required)
 #   install-from-crates    cargo install tmux-fingers-rs
 #   install-from-source    cargo install --path "$CURRENT_DIR"
 #   build-local            cargo build --release && copy binary to ./bin/
@@ -59,11 +61,115 @@ function require_cargo() {
     echo
     echo "    https://rustup.rs"
     echo
+    echo
+    echo "Or pick \"Download prebuilt binary\" from the wizard menu to skip"
+    echo "the Rust toolchain entirely."
+    echo
     return 1
   fi
 }
 
+function require_curl_or_wget() {
+  if command -v curl >/dev/null 2>&1; then
+    DOWNLOADER="curl"
+  elif command -v wget >/dev/null 2>&1; then
+    DOWNLOADER="wget"
+  else
+    echo "Error: neither \`curl\` nor \`wget\` is on \$PATH."
+    return 1
+  fi
+}
+
+function download_to() {
+  local url="$1"
+  local dest="$2"
+  case "$DOWNLOADER" in
+    curl) curl --fail --location --silent --show-error "$url" -o "$dest" ;;
+    wget) wget --quiet --output-document="$dest" "$url" ;;
+  esac
+}
+
+function read_cargo_version() {
+  if [[ ! -f "$CURRENT_DIR/Cargo.toml" ]]; then
+    echo ""
+    return
+  fi
+  grep -m1 '^version' "$CURRENT_DIR/Cargo.toml" \
+    | sed -E 's/^version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/'
+}
+
+function detect_target() {
+  local sys mach
+  sys="$(uname -s)"
+  mach="$(uname -m)"
+  case "$sys-$mach" in
+    Linux-x86_64)  echo "x86_64-unknown-linux-gnu" ;;
+    Darwin-arm64)  echo "aarch64-apple-darwin" ;;
+    *) echo "" ;;
+  esac
+}
+
 # ---------- actions ---------------------------------------------------------
+
+function download_binary() {
+  echo "Downloading prebuilt tmux-fingers-rs binary from GitHub Releases..."
+  echo
+  require_curl_or_wget || exit 1
+
+  local target version tag base archive checksum tmpdir
+  target="$(detect_target)"
+  if [[ -z "$target" ]]; then
+    echo "Error: no prebuilt binary is published for $(uname -s)/$(uname -m)."
+    echo
+    echo "Pick \"Install from crates.io\" or \"Build locally\" instead."
+    exit 1
+  fi
+
+  version="$(read_cargo_version)"
+  if [[ -z "$version" ]]; then
+    echo "Error: could not read version from Cargo.toml."
+    echo "This action expects to be run from inside a tmux-fingers-rs checkout."
+    exit 1
+  fi
+
+  tag="v${version}"
+  base="https://github.com/martintrojer/tmux-fingers-rs/releases/download/${tag}"
+  archive="tmux-fingers-rs-${tag}-${target}.tar.gz"
+  checksum="${archive}.sha256"
+  tmpdir="$(mktemp -d)"
+
+  echo "Target:   $target"
+  echo "Version:  $version"
+  echo "URL:      $base/$archive"
+  echo
+
+  download_to "$base/$archive"  "$tmpdir/$archive"
+  download_to "$base/$checksum" "$tmpdir/$checksum"
+
+  echo "Verifying SHA256..."
+  pushd "$tmpdir" >/dev/null
+    if command -v sha256sum >/dev/null 2>&1; then
+      sha256sum --check "$checksum"
+    else
+      shasum -a 256 --check "$checksum"
+    fi
+  popd >/dev/null
+
+  echo "Extracting..."
+  tar -C "$tmpdir" -xzf "$tmpdir/$archive"
+
+  mkdir -p "$CURRENT_DIR/bin"
+  cp "$tmpdir/tmux-fingers-rs-${tag}-${target}/tmux-fingers-rs" \
+     "$CURRENT_DIR/bin/tmux-fingers-rs"
+  chmod a+x "$CURRENT_DIR/bin/tmux-fingers-rs"
+
+  rm -rf "$tmpdir"
+
+  echo
+  echo "Installed: $CURRENT_DIR/bin/tmux-fingers-rs"
+  echo "The plugin entrypoint will pick it up automatically."
+  exit 0
+}
 
 function install_from_crates() {
   echo "Installing tmux-fingers-rs from crates.io..."
@@ -107,13 +213,14 @@ function build_local() {
 # ---------- dispatch --------------------------------------------------------
 
 case "$action" in
+  download-binary)     download_binary     ;;
   install-from-crates) install_from_crates ;;
   install-from-source) install_from_source ;;
   build-local)         build_local         ;;
   "")                  : ;;  # fall through to menu
   *)
     echo "Unknown action: $action"
-    echo "Valid actions: install-from-crates | install-from-source | build-local"
+    echo "Valid actions: download-binary | install-from-crates | install-from-source | build-local"
     exit 2
     ;;
 esac
@@ -136,8 +243,9 @@ tmux display-menu -T "tmux-fingers-rs" \
   "-  $(get_message) " "" "" \
   "- " "" "" \
   "" \
-  "Install from crates.io (cargo install tmux-fingers-rs)" c "new-window \"$CURRENT_DIR/install-wizard.sh install-from-crates\"" \
+  "Download prebuilt binary (recommended, no Rust required)" d "new-window \"$CURRENT_DIR/install-wizard.sh download-binary\"" \
+  "Install from crates.io (cargo install tmux-fingers-rs)"   c "new-window \"$CURRENT_DIR/install-wizard.sh install-from-crates\"" \
   "Build locally into ./bin (TPM-friendly, no global install)" b "new-window \"$CURRENT_DIR/install-wizard.sh build-local\"" \
-  "Install from this checkout (cargo install --path .)"   s "new-window \"$CURRENT_DIR/install-wizard.sh install-from-source\"" \
+  "Install from this checkout (cargo install --path .)"      s "new-window \"$CURRENT_DIR/install-wizard.sh install-from-source\"" \
   "" \
   "Exit" q ""

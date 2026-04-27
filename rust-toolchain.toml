@@ -1,0 +1,5 @@
+# Pinning the project toolchain prevents local/CI drift on new clippy lints.
+# Bump deliberately when you want to adopt a newer stable.
+[toolchain]
+channel = "1.95.0"
+components = ["rustfmt", "clippy"]
