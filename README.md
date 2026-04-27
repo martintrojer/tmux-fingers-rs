@@ -1,403 +1,207 @@
-![tmux-fingers](./logo.svg)
+# tmux-fingers (Rust)
 
-![demo](https://github.com/Morantron/tmux-fingers/assets/3304507/cafe8877-1c98-41b1-bb65-b72129fea701)
+Rust port of [Morantron/tmux-fingers][upstream] (originally written in Crystal),
+intended to be a drop-in replacement for the Crystal binary used by the tmux
+plugin.
 
-# Usage
+[upstream]: https://github.com/Morantron/tmux-fingers
 
-Press ( <kbd>prefix</kbd> + <kbd>F</kbd> ) to enter **[fingers]** mode, it will highlight relevant stuff in the current
-pane along with letter hints. By pressing those letters, the highlighted match
-will be copied to the clipboard. Less keystrokes == profit!
+## Install
 
-Here is a list of the stuff highlighted by default.
+Install the binary from this directory:
 
-* File paths
-* SHAs
-* numbers ( 4+ digits )
-* hex numbers
-* IP addresses
-* kubernetes resources
-* UUIDs
-* git status/diff output
-
-Checkout [list of built-in patterns](#fingers-enabled-builtin-patterns).
-
-## Key shortcuts
-
-While in **[fingers]** mode, you can use the following shortcuts:
-
-* <kbd>a</kbd>-<kbd>z</kbd>: copies selected match to the clipboard
-* <kbd>CTRL</kbd> + <kbd>a</kbd>-<kbd>z</kbd>: copies selected match to the clipboard and triggers [@fingers-ctrl-action](#fingers-ctrl-action). By default it triggers `:open:` action, which is useful for opening links in the browser for example.
-* <kbd>SHIFT</kbd> + <kbd>a</kbd>-<kbd>z</kbd>: copies selected match to the clipboard and triggers [@fingers-shift-action](#fingers-shift-action). By default it triggers `:paste:` action, which automatically pastes selected matches.
-* <kbd>ALT</kbd> + <kbd>a</kbd>-<kbd>z</kbd>: copies selected match to the clipboard and triggers [@fingers-alt-action](#fingers-alt-action). There is no default, configurable by the user.
-* <kbd>TAB</kbd>: toggle multi mode. First press enters multi mode, which allows to select multiple matches. Second press will exit with the selected matches copied to the clipboard.
-* <kbd>q</kbd>, <kbd>ESC</kbd> or <kbd>CTRL</kbd> + <kbd>c</kbd>: exit **[fingers]** mode
-
-# Requirements
-
-* tmux 3.0 or newer
-
-# Installation
-
-## Using [Tmux Plugin Manager](https://github.com/tmux-plugins/tpm)
-
-Add the following to your list of TPM plugins in `.tmux.conf`:
-
-```tmux
-set -g @plugin 'Morantron/tmux-fingers'
+```sh
+cargo install --path .
 ```
 
-Hit <kbd>prefix</kbd> + <kbd>I</kbd> to fetch and source the plugin. The first time you run it you'll be presented with a wizard to complete the installation. Depending on the platform, the wizard will offer the following installation methods:
+The tmux plugin checks for `tmux-fingers` on your `PATH` first, so after installation it will pick up this binary automatically.
 
-- Building from source (requires [crystal](https://crystal-lang.org/install/)). _Available in all platforms_
-- Install through [brew](https://brew.sh). _Mac OS only_.
-- Download standalone binary. _Linux x86 only_.
+## Production Build
 
-## Manual
+For a release build without installing it:
 
-Clone the repo:
-
-```
-$ git clone https://github.com/Morantron/tmux-fingers ~/.tmux/plugins/tmux-fingers
+```sh
+cargo build --release
 ```
 
-Source it in your `.tmux.conf`:
+Binary path:
 
-```tmux
-run-shell ~/.tmux/plugins/tmux-fingers/tmux-fingers.tmux
+```sh
+./target/release/tmux-fingers
 ```
 
-Reload TMUX conf by running:
+Current status:
+- Binary target name is `tmux-fingers`
+- Version is aligned to `2.6.2`
+- `load-config`, `start`, `send-input`, `version`, and `info` exist
+- Runtime behavior is covered by unit, compliance, and live tmux tests
 
-```
-$ tmux source-file ~/.tmux.conf
-```
+## Build
 
-The first time you run it you'll be presented with a wizard to complete the installation.
-
-# Configuration
-
-NOTE: for changes to take effect, you'll need to source again your `.tmux.conf` file.
-
-* [@fingers-key](#fingers-key)
-* [@fingers-jump-key](#fingers-jump-key)
-* [@fingers-pattern-N](#fingers-pattern-n)
-* [@fingers-main-action](#fingers-main-action)
-* [@fingers-ctrl-action](#fingers-ctrl-action)
-* [@fingers-alt-action](#fingers-alt-action)
-* [@fingers-shift-action](#fingers-shift-action)
-* [@fingers-hint-style](#fingers-hint-style)
-* [@fingers-highlight-style](#fingers-highlight-style)
-* [@fingers-backdrop-style](#fingers-backdrop-style)
-* [@fingers-selected-hint-style](#fingers-selected-hint-style)
-* [@fingers-selected-highlight-style](#fingers-selected-highlight-style)
-* [@fingers-hint-position](#fingers-hint-position)
-* [@fingers-keyboard-layout](#fingers-keyboard-layout)
-* [@fingers-show-copied-notification](#fingers-show-copied-notification)
-* [@fingers-enabled-builtin-patterns](#fingers-enabled-builtin-patterns)
-* [@fingers-use-system-clipboard](#fingers-use-system-clipboard)
-* [@fingers-enable-bindings](#fingers-enable-bindings)
-
-Recipes:
-
-* [Start tmux-fingers without prefix](#start-tmux-fingers-without-prefix)
-* [Using only specific patterns](#using-only-specific-patterns)
-* [Using arbitrary commands](#using-arbitrary-commands)
-* [Target adjacent panes](#target-adjacent-panes)
-
-## @fingers-key
-
-`default: F`
-
-Customize how to enter fingers mode. Always preceded by prefix: `prefix + @fingers-key`.
-
-For example:
-
-```tmux
-set -g @fingers-key F
+```sh
+cargo build
 ```
 
-## @fingers-jump-key
+Debug binary:
 
-`default: J`
-
-Customize how to enter fingers jump mode. Always preceded by prefix: `prefix + @fingers-jump-key`.
-
-In jump mode, the cursor will be placed in the position of the match after the hint is selected.
-
-## @fingers-pattern-N
-
-You can also add additional patterns if you want more stuff to be highlighted:
-
-```tmux
-# You can define custom patterns like this
-set -g @fingers-pattern-0 'git rebase --(abort|continue)'
-
-# Increment the number and define more patterns
-set -g @fingers-pattern-1 'some other pattern'
-
-# You can use a named capture group like this (?<match>YOUR-REGEX-HERE)
-# to only highlight and copy part of the match.
-set -g @fingers-pattern-2 'capture (?<match>only this)'
-
-# Watch out for backslashes! For example the regex \d{50} matches 50 digits.
-set -g @fingers-pattern-3 '\d{50}'  # No need to escape if you use single quotes
-set -g @fingers-pattern-4 "\\d{50}" # If you use double quotes, you'll need to escape backslashes for special characters to work
-set -g @fingers-pattern-5 \\d{50} # Escaping also needed if you don't use any quotes
+```sh
+./target/debug/tmux-fingers
 ```
 
-Patterns use [PCRE pattern syntax](https://www.pcre.org/original/doc/html/pcrepattern.html).
+## Test
 
-If the introduced regex contains an error, an error will be shown when invoking the plugin.
+Run everything:
 
-## @fingers-main-action
-
-`default: :copy:`
-
-By default **tmux-fingers** will copy matches in tmux and system clipboard.
-
-If you still want to set your own custom command you can do so like this:
-
-```tmux
-set -g @fingers-main-action '<your command here>'
-```
-This command will also receive the following:
-
-  * `MODIFIER`: environment variable set to `ctrl`, `alt`, or `shift` specififying which modifier was used when selecting the match.
-  * `HINT`: environment variable the selected letter hint itself ( ex: `q`, `as`, etc... ).
-  * `stdin`: copied text will be piped to `@fingers-copy-command`.
-
-You can also use the following special values:
-
-* `:paste:` Copy the the match and paste it automatically.
-* `:copy:` Uses built-in system clipboard integration to copy the match.
-* `:open:` Uses built-in open file integration to open the file ( opens URLs in default browser, files in OS file navigator, etc ).
-
-## @fingers-ctrl-action
-
-`default: :open:`
-
-Same as [@fingers-main-action](#fingers-main-action) but only called when match is selected by holding <kbd>ctrl</kbd>
-
-## @fingers-alt-action
-
-Same as [@fingers-main-action](#fingers-main-action) but only called when match is selected by holding <kbd>alt</kbd>
-
-## @fingers-shift-action
-
-`default: :paste:`
-
-Same as [@fingers-main-action](#fingers-main-action) but only called when match is selected by holding <kbd>shift</kbd>
-
-## @fingers-hint-style
-
-`default: "fg=green,bold"`
-
-With this option you can define the styles for the letter hints.
-
-You can customize the styles using the same syntax used in `.tmux.conf` for styling the status bar.
-
-More info in the `STYLES` section of `man tmux`.
-
-Supported styles are: `bright`, `bold`, `dim`, `underscore`, `italics`.
-
-## @fingers-highlight-style
-
-`default: "fg=yellow"`
-
-Custom styles for the highlighted match. See [@fingers-hint-style](#fingers-hint-style) for more details.
-
-## @fingers-backdrop-style
-
-`default: ""`
-
-Custom styles for all the text that is not matched. See [@fingers-hint-style](#fingers-hint-style) for more details.
-
-## @fingers-selected-hint-style
-
-`default: "fg=blue,bold"`
-
-Format for hints in selected matches in multimode.
-
-## @fingers-selected-highlight-style
-
-`default: "fg=blue"`
-
-Format for selected matches in multimode.
-
-## @fingers-hint-position
-
-`default: "left"`
-
-Control the position where the hint is rendered. Possible values are `"left"`
-and `"right"`.
-
-## @fingers-keyboard-layout
-
-`default: "qwerty"`
-
-Hints are generated taking optimal finger movement into account. You can choose between the following:
-
-  * `qwerty`: the default, use all letters
-  * `qwerty-left-hand`: only use letters easily reachable with left hand
-  * `qwerty-right-hand`: only use letters easily reachable with right hand
-  * `qwerty-homerow`: only use letters in the homerow
-  * `qwertz`
-  * `qwertz-left-hand`
-  * `qwertz-right-hand`
-  * `qwertz-homerow`
-  * `azerty`
-  * `azerty-left-hand`
-  * `azerty-right-hand`
-  * `azerty-homerow`
-  * `colemak`
-  * `colemak-left-hand`
-  * `colemak-right-hand`
-  * `colemak-homerow`
-  * `dvorak`
-  * `dvorak-left-hand`
-  * `dvorak-right-hand`
-  * `dvorak-homerow`
-
-## @fingers-show-copied-notification
-
-`default: 0`
-
-Show a message using `tmux display-message` notifying about the copied result.
-
-## @fingers-enabled-builtin-patterns
-
-`default: all`
-
-A list of comma separated pattern names. Built-in patterns are the following:
-
-| Name              | Description                                               | Example                                        |
-| ----------------- | --------------------------------------------------------- | ---------------------------------------------- |
-| ip                | ipv4 addresses                                            | `192.168.0.1`                                  |
-| uuid              | uuid identifier                                           | `f1b43afb-773c-4da2-9ae5-fef1aa6945ce`         |
-| sha               | sha identifier                                            | `c8b911e2c7e9a6cc57143eaa12cad57c1f0d69df`     |
-| digit             | four or more digits                                       | `1337`                                         |
-| url               | urls (supported protocols: http/https/git/ssh/file)       | `https://asdf.com`                             |
-| path              | file paths                                                | `path/to/file`                                 |
-| hex               | hexidecimal numbers                                       | `0x00FF`                                       |
-| kubernetes        | kubernetes identifier                                     | `deployment.apps/zookeeper`                    |
-| git-status        | will match file paths in the output of git status         | `modified: ./path/to/file`                     |
-| git-status-branch | will match branch name in the output of git status        | `Your branch is up to date withname-of-branch` |
-| diff              | will match paths in diff output                           | `+++ a/path/to/file`                           |
-
-## @fingers-use-system-clipboard
-
-`default: 1`
-
-Whether to use the system clipboard when copying matches. If set to `0`,
-tmux-fingers will only copy matches to the tmux buffer.
-
-## @fingers-enable-bindings
-
-`default: 1`
-
-By default, tmux-fingers will bind to `prefix` + `@fingers-key` and `prefix` +
-`@fingers-jump-key`. You can opt-out of these bindings in case they clash with
-other parts of your configuration.
-
-Check [recipes](#Recipes) for alternative ways to set up bindings.
-
-## @fingers-cli
-
-You can set up key bindings directly to invoke tmux-fingers by using a special global option `@fingers-cli` exposed by the plugin.
-
-The following options are available:
-
-```
-Usage:
-        tmux-fingers start <arguments> [options]
-
-Arguments:
-        pane_id    pane id (also accepts tmux target-pane tokens specified in tmux man pages) (required)
-
-Options:
-        --mode              can be "jump" or "default" (default: default)
-        --patterns          comma separated list of pattern names
-        --main-action       command to which the output will be piped
-        --ctrl-action       command to which the output will be piped when holding CTRL key
-        --alt-action        command to which the output will be piped when holding ALT key
-        --shift-action      command to which the output will be pipedwhen holding SHIFT key
-        -h, --help          prints help
+```sh
+cargo test
 ```
 
-Check some examples in the [Recipes](#Recipes) section below.
+Strict lint:
 
-
-# Recipes
-
-## Start tmux-fingers without prefix
-
-You can start tmux-fingers without having to press tmux prefix by adding bindings like this:
-
-```tmux
-# tmux.conf
-
-# Start tmux fingers by pressing Alt+F
-bind -n M-f run -b "#{@fingers-cli} start #{pane_id}"
-
-# Start tmux fingers in jump mode by pressing Alt+J
-bind -n M-j run -b "#{@fingers-cli} start #{pane_id} --mode jump"
-
+```sh
+cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-## Using only specific patterns
+Format:
 
-You can start tmux-fingers with an specific set of built-in or custom patterns.
-
-```tmux
-# match urls with prefix + u
-bind u run -b "#{@fingers-cli} start #{pane_id} --patterns url"
-
-# match hashes with prefix + h
-bind h run -b "#{@fingers-cli} start #{pane_id} --patterns sha"
-
-# match git stuff with prefix + g
-bind g run -b "#{@fingers-cli} start #{pane_id} --patterns git-status,git-status-branch"
-
-# match custom pattern with prefix + y
-set -g @fingers-pattern-yolo "yolo.*"
-bind y run -b "#{@fingers-cli} start #{pane_id} --patterns yolo"
+```sh
+cargo fmt
 ```
 
-## Using arbitrary commands
+## Test Coverage
 
-You can use tmux-fingers with any arbitrary command.
+The suite currently includes:
+- unit tests for pure logic and command construction
+- compliance tests for builtin regex behavior
+- live tmux integration tests for:
+  - default selection
+  - multimode
+  - jump mode
+  - custom patterns
+  - `:paste:`
+  - custom shell actions
 
-```tmux
-# edit file using nvim in a new tmux window with prefix + e
-bind e run -b "#{@fingers-cli} start #{pane_id} --patterns path --main-action 'xargs tmux new-window nvim'"
+## Compatibility Notes
+
+The main compatibility target is the tmux plugin in the parent repo. The most important contracts are:
+- `tmux-fingers version`
+- `tmux-fingers load-config`
+- `tmux-fingers start`
+- hidden `tmux-fingers send-input`
+
+Some presentation details still differ from the Crystal binary, especially `info` output formatting.
+
+## Useful Commands
+
+Compare local binary help:
+
+```sh
+./target/debug/tmux-fingers --help
+./target/debug/tmux-fingers start --help
 ```
 
-## Target adjacent panes
+Run only live tmux tests:
 
-You can use tmux target-pane tokens to target adjacent panes. This
-configuration uses vim-style <kbd>ALT</kbd>+<kbd>hjkl</kbd> keys to
-directionally adjacent panes.
-
-Also uses <kbd>ALT</kbd>+<kbd>o</kbd> to target the last pane.
-
-```tmux
-bind -n M-h run -b "#{@fingers-cli} start {left-of}"
-bind -n M-j run -b "#{@fingers-cli} start {down-of}"
-bind -n M-k run -b "#{@fingers-cli} start {up-of}"
-bind -n M-l run -b "#{@fingers-cli} start {right-of}"
-bind -n M-o run -b "#{@fingers-cli} start {last}"
+```sh
+cargo test --test live_tmux
 ```
 
-# Acknowledgements and inspiration
+## Tracking upstream
 
-This plugin is heavily inspired by
-[tmux-copycat](https://github.com/tmux-plugins/tmux-copycat) ( **tmux-fingers**
-predefined search are *copycatted* :trollface: from
-[tmux-copycat](https://github.com/tmux-plugins/tmux-copycat) ).
+This repository is a Rust port of the Crystal project
+[Morantron/tmux-fingers][upstream]. Upstream changes are tracked on the
+`upstream-crystal` branch and ported manually to `main`.
 
-Kudos to [bruno-](https://github.com/bruno-) for paving the way to tmux
-plugins! :clap: :clap:
+### Branches
 
-# License
+| Branch             | Purpose                                                       |
+| ------------------ | ------------------------------------------------------------- |
+| `main`             | This Rust port. Default branch.                               |
+| `upstream-crystal` | Pristine fast-forward mirror of `Morantron/tmux-fingers` `master`. Never commit here. |
 
-[MIT](https://github.com/Morantron/tmux-fingers/blob/master/LICENSE)
+### One-time remote setup
+
+```sh
+git remote add upstream git@github.com:Morantron/tmux-fingers.git
+git fetch upstream
+```
+
+### Refreshing `upstream-crystal`
+
+Run periodically. It is fast-forward only — no local edits live on this branch:
+
+```sh
+git fetch upstream
+git checkout upstream-crystal
+git merge --ff-only upstream/master
+git push origin upstream-crystal
+```
+
+### Finding what needs porting
+
+Port commits are recorded on `main` with a `Port:` subject prefix and the
+upstream short SHA in parentheses, e.g.:
+
+```
+Port: fix line jumping with tabs/emojis in zoomed panes (upstream 99dafe6)
+```
+
+To list new upstream commits since the most recent port:
+
+```sh
+LAST=$(git log main --grep='^Port:' -n1 --pretty=format:%s \
+        | grep -oE '[0-9a-f]{7,}' | head -1)
+git log --oneline ${LAST}..upstream-crystal
+```
+
+Or review the full upstream history that post-dates this port's starting
+point by browsing `upstream-crystal` directly:
+
+```sh
+git log --oneline upstream-crystal
+```
+
+### Porting a change
+
+```sh
+git checkout main
+git checkout -b port/<short-description>
+
+# Inspect the upstream change:
+git show <upstream-sha>
+
+# Implement the equivalent in Rust, with tests. Then:
+git commit -m "Port: <upstream subject> (upstream <short-sha>)"
+```
+
+This convention keeps the porting log greppable:
+
+```sh
+git log --oneline --grep='^Port:'
+```
+
+### Optional: tag porting checkpoints
+
+After a porting session, snapshot how far you've caught up:
+
+```sh
+git tag ported/$(date +%Y-%m-%d) upstream-crystal
+git push origin --tags
+```
+
+Then `git log ported/<date>..upstream-crystal` is always the unported
+delta.
+
+### Things still to port from the Crystal repo
+
+The following user-facing pieces are not yet present in this Rust
+repository and currently live only on `upstream-crystal`. Port them when
+you want this repo to be installable as a standalone tmux plugin (rather
+than just a binary replacement consumed by the upstream plugin):
+
+- `tmux-fingers.tmux` plugin entrypoint script (currently reads
+  `shard.yml` for version comparison — needs to read `Cargo.toml` or
+  `tmux-fingers version` instead)
+- `install-wizard.sh`
+- `docs/`, `CHANGELOG.md`, user-facing `README` content
+- `.github/` issue and PR templates (currently still the Crystal ones)
