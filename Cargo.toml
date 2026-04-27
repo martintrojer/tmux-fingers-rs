@@ -1,6 +1,6 @@
 [package]
 name = "tmux-fingers-rs"
-version = "2.6.2"
+version = "0.1.0"
 edition = "2024"
 description = "Rust port of tmux-fingers: copy text from a tmux pane using letter hints."
 license = "MIT"

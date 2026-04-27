@@ -359,14 +359,12 @@ where
             }
         }
         "exit" => state.exiting = true,
-        "toggle-multi-mode" => {
-            if mode != "jump" {
-                let was_multi = state.multi_mode;
-                state.multi_mode = !state.multi_mode;
-                if was_multi && !state.multi_mode {
-                    state.result = state.multi_matches.join(" ");
-                    state.exiting = true;
-                }
+        "toggle-multi-mode" if mode != "jump" => {
+            let was_multi = state.multi_mode;
+            state.multi_mode = !state.multi_mode;
+            if was_multi && !state.multi_mode {
+                state.result = state.multi_matches.join(" ");
+                state.exiting = true;
             }
         }
         "toggle-help" | "fzf" | "noop" | "" => {}
