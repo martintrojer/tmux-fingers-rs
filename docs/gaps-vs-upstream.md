@@ -25,31 +25,14 @@ confirm presence and equivalence.
 | State preservation (`prefix`, `prefix2`, last key table, last pane) | ✅ |
 | `Copied: ...` notification | ✅ |
 | `info` command output format | ❌ different format and one missing field |
-| `installation-method` reporting | ⚠ always reports `manual` (we don't set the build-time env yet) |
+| `installation-method` reporting | ✅ set by every build path (release workflow + wizard actions) |
+| WSL clipboard via `clip.exe` | 🚫 out of scope (this port does not target Windows / WSL) |
 | `toggle-help` (bound to `?`) | ⚠ no-op in *both* implementations; not actually a gap |
 | `fzf` action (bound to Space) | ⚠ no-op in *both* implementations; upstream comment says "soon" |
 
 ## Real gaps
 
-### 1. WSL clipboard via `clip.exe` is missing the `cat |` prefix
-
-**Where:** `src/fingers/action_runner.rs`, `system_copy_command_with`
-returns `"clip.exe"` where upstream returns `"cat | clip.exe"`.
-
-**Effect on Windows / WSL:** `clip.exe` reads from stdin, but our
-caller invokes the command directly with no shell pipeline, so the
-match never reaches `clip.exe`'s stdin and nothing ends up on the
-Windows clipboard.
-
-**Fix:** either return `"cat | clip.exe"` to match upstream and run the
-command through a shell, or restructure the caller to feed the match
-directly to `clip.exe`'s stdin (in which case the `cat |` is
-unnecessary). Pick one.
-
-**Severity:** breaks `:copy:` for WSL users. Has not affected anyone
-yet because we have no WSL users.
-
-### 2. `info` output is tab-separated text instead of an ASCII table
+### 1. `info` output is tab-separated text instead of an ASCII table
 
 **Upstream** uses the `tablo` Crystal library to render a bordered
 two-column table:
@@ -87,28 +70,30 @@ trivially machine-parseable (`cut -f`).
 
 **Sub-gap:** the field is renamed `crystal-version` → `rust-version`,
 but the value is hardcoded to `"unknown"`. Upstream reports the actual
-Crystal compiler version. We should report `rustc --version` (set at
-build time via `build.rs` and `env!`).
+Crystal compiler version. To restore parity we'd capture `rustc
+--version` at build time via a `build.rs` that emits `cargo:rustc-env=`,
+and read it back with `env!`. Not worth the build complexity yet.
 
-### 3. `installation-method` always reports `manual`
+## Out of scope
 
-**Where:** `src/cli.rs`, the `Info` command reads
-`option_env!("WIZARD_INSTALLATION_METHOD")` at compile time and falls
-back to `"manual"`.
+### WSL clipboard via `clip.exe`
 
-**Why:** none of our build paths (the release workflow, the install
-wizard's `cargo build --release` and `cargo install --path .` actions)
-set this env. Upstream's `install-wizard.sh` sets
-`WIZARD_INSTALLATION_METHOD=build-from-source` for the
-build-from-source action and `WIZARD_INSTALLATION_METHOD=download-binary`
-for the deployment workflow.
+**Symptom under upstream parity:** `system_copy_command_with` returns
+`"clip.exe"` where upstream returns `"cat | clip.exe"`. Without the
+`cat |` shell pipeline (and a shell to run it through), `clip.exe`
+never receives the match on stdin and nothing ends up on the Windows
+clipboard.
 
-**Fix:** set the env in `.github/workflows/release.yml`
-(`download-binary`) and in `install-wizard.sh`'s `build_local` /
-`install_from_source` actions (`build-from-source`). Optionally also in
-the crates.io path (`cargo-install`).
+**Decision:** this port does not target Windows / WSL. The `clip.exe`
+branch in `system_copy_command_with` is left intact for symmetry with
+upstream, but it is not exercised, not fixed, and not tested. Linux
+(`wl-copy`, `xclip`, `xsel`) and macOS (`pbcopy`,
+`reattach-to-user-namespace`) clipboard backends are the supported set.
 
-**Severity:** trivial. Affects only the diagnostic output of `info`.
+**Reconsider if:** a Windows / WSL user shows up and asks. The fix is
+small (run the command through `sh -c` for the `clip.exe` arm, or
+restructure to feed the match directly to `clip.exe`'s stdin without
+the pipeline).
 
 ## Non-gaps (worth recording so we don't re-flag them)
 

@@ -175,7 +175,8 @@ function install_from_crates() {
   echo "Installing tmux-fingers-rs from crates.io..."
   echo
   require_cargo || exit 1
-  cargo install --locked tmux-fingers-rs
+  WIZARD_INSTALLATION_METHOD=cargo-install \
+    cargo install --locked tmux-fingers-rs
   echo
   echo "Installed. Make sure ~/.cargo/bin is on your \$PATH."
   exit 0
@@ -185,7 +186,8 @@ function install_from_source() {
   echo "Installing tmux-fingers-rs from local checkout ($CURRENT_DIR)..."
   echo
   require_cargo || exit 1
-  cargo install --locked --path "$CURRENT_DIR"
+  WIZARD_INSTALLATION_METHOD=cargo-install \
+    cargo install --locked --path "$CURRENT_DIR"
   echo
   echo "Installed. Make sure ~/.cargo/bin is on your \$PATH."
   exit 0
@@ -197,7 +199,8 @@ function build_local() {
   require_cargo || exit 1
 
   pushd "$CURRENT_DIR" > /dev/null
-    cargo build --release
+    WIZARD_INSTALLATION_METHOD=build-from-source \
+      cargo build --release
   popd > /dev/null
 
   mkdir -p "$CURRENT_DIR/bin"

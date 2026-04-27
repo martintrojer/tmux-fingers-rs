@@ -42,6 +42,10 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Build release binary
+        env:
+          # Picked up at compile time via option_env! in src/cli.rs and
+          # surfaced by `tmux-fingers-rs info`.
+          WIZARD_INSTALLATION_METHOD: download-binary
         run: cargo build --release --target ${{ matrix.target }} --locked
 
       - name: Package
