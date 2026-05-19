@@ -366,42 +366,59 @@ impl Shell for TputShell {
 }
 
 pub fn tmux_version_to_semver(input: &str) -> Result<TmuxVersion, String> {
-    let mut chars = input.chars().peekable();
-
-    let major = parse_number(&mut chars).ok_or_else(|| format!("Invalid tmux version {input}"))?;
-    if chars.next() != Some('.') {
-        return Err(format!("Invalid tmux version {input}"));
-    }
-    let minor = parse_number(&mut chars).ok_or_else(|| format!("Invalid tmux version {input}"))?;
-    let patch = match chars.next() {
-        None => 0,
-        Some(letter) if letter.is_ascii_lowercase() && chars.next().is_none() => {
-            u32::from(letter as u8 - b'a' + 1)
+    // Mirror upstream Crystal regex: /([1-9]+[0-9]*)\.([0-9]+)([a-z]+)?/
+    // so that prefixes like "next-" in `tmux next-3.7` are tolerated.
+    let bytes = input.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i].is_ascii_digit() && bytes[i] != b'0' {
+            if let Some((version, _)) = try_parse_at(bytes, i) {
+                return Ok(version);
+            }
         }
-        _ => return Err(format!("Invalid tmux version {input}")),
-    };
-
-    Ok(TmuxVersion {
-        major,
-        minor,
-        patch,
-    })
+        i += 1;
+    }
+    Err(format!("Invalid tmux version {input}"))
 }
 
-fn parse_number(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Option<u32> {
-    let mut out = String::new();
-    while let Some(ch) = chars.peek() {
-        if !ch.is_ascii_digit() {
-            break;
+fn try_parse_at(bytes: &[u8], start: usize) -> Option<(TmuxVersion, usize)> {
+    let (major, mut i) = take_number(bytes, start)?;
+    if i >= bytes.len() || bytes[i] != b'.' {
+        return None;
+    }
+    i += 1;
+    let (minor, mut j) = take_number(bytes, i)?;
+    let mut patch = 0u32;
+    if j < bytes.len() && bytes[j].is_ascii_lowercase() {
+        let letter = bytes[j];
+        patch = u32::from(letter - b'a' + 1);
+        j += 1;
+        // Skip any additional trailing letters (upstream only honors the
+        // first letter for the patch value but tolerates more).
+        while j < bytes.len() && bytes[j].is_ascii_lowercase() {
+            j += 1;
         }
-        out.push(*ch);
-        chars.next();
     }
-    if out.is_empty() {
-        None
-    } else {
-        out.parse().ok()
+    Some((
+        TmuxVersion {
+            major,
+            minor,
+            patch,
+        },
+        j,
+    ))
+}
+
+fn take_number(bytes: &[u8], start: usize) -> Option<(u32, usize)> {
+    let mut end = start;
+    while end < bytes.len() && bytes[end].is_ascii_digit() {
+        end += 1;
     }
+    if end == start {
+        return None;
+    }
+    let n: u32 = std::str::from_utf8(&bytes[start..end]).ok()?.parse().ok()?;
+    Some((n, end))
 }
 
 fn parse_pane(input: &str) -> Result<Pane, String> {
@@ -476,5 +493,27 @@ mod tests {
         let left = tmux_version_to_semver("3.0a").unwrap();
         let right = tmux_version_to_semver("3.1").unwrap();
         assert!(left < right);
+    }
+
+    #[test]
+    fn parses_prefixed_versions() {
+        let version = tmux_version_to_semver("next-3.7").unwrap();
+        assert_eq!(version.major, 3);
+        assert_eq!(version.minor, 7);
+        assert_eq!(version.patch, 0);
+    }
+
+    #[test]
+    fn parses_prefixed_letter_versions() {
+        let version = tmux_version_to_semver("openbsd-3.4a").unwrap();
+        assert_eq!(version.major, 3);
+        assert_eq!(version.minor, 4);
+        assert_eq!(version.patch, 1);
+    }
+
+    #[test]
+    fn rejects_strings_without_version() {
+        assert!(tmux_version_to_semver("next").is_err());
+        assert!(tmux_version_to_semver("").is_err());
     }
 }
