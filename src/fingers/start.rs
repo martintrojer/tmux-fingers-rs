@@ -173,7 +173,23 @@ impl StartRunner {
         Ok((state, targets))
     }
 
+    /// Runs the action for the selected match. Action failures are reported to
+    /// the user instead of aborting, so that cleanup still restores tmux state.
     fn process_result(
+        &self,
+        state: &State,
+        targets: &BTreeMap<String, Target>,
+    ) -> Result<(), String> {
+        match self.try_process_result(state, targets) {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                eprintln!("[tmux-fingers-rs] error processing result: {err}");
+                report_action_error(&self.tmux, self.target_pane.pane_width, &err)
+            }
+        }
+    }
+
+    fn try_process_result(
         &self,
         state: &State,
         targets: &BTreeMap<String, Target>,
@@ -374,6 +390,17 @@ where
     Ok(!state.exiting)
 }
 
+/// Displays a styled, full-width error banner in tmux, mirroring upstream's
+/// `Error processing result` reporting.
+fn report_action_error(tmux: &Tmux, pane_width: i32, message: &str) -> Result<(), String> {
+    let banner =
+        format!("#[bg=red,fg=white,bold][tmux-fingers-rs]#[bg=red,fg=black,nobold] {message}");
+    let width = pane_width.max(0) as usize * 2;
+    let padding = width.saturating_sub(banner.chars().count());
+    let banner = format!("{banner}{}", " ".repeat(padding));
+    tmux.display_message(&banner, 3000)
+}
+
 fn needs_resize(target_pane: &Pane, pane_contents: &[String]) -> bool {
     let pane_width = target_pane.pane_width as usize;
     pane_contents.iter().any(|line| {
@@ -478,7 +505,7 @@ mod tests {
 
     use super::{
         CleanupState, State, Target, TrackedTmuxState, needs_resize, patterns_from_options,
-        process_input,
+        process_input, report_action_error,
     };
 
     struct NullPrinter;
@@ -583,6 +610,38 @@ mod tests {
         let (target, active) = super::parse_pane_target_format(&tmux, "{last}").unwrap();
         assert_eq!(target.pane_id, "%2");
         assert_eq!(active.pane_id, "%3");
+    }
+
+    #[test]
+    fn reports_action_errors_as_styled_padded_message() {
+        let tmux = crate::tmux::Tmux::fake("3.3a");
+        report_action_error(&tmux, 50, "boom").unwrap();
+
+        let executed = tmux.executed_commands();
+        let command = executed
+            .iter()
+            .find(|cmd| cmd.starts_with("display-message -d 3000 "))
+            .expect("expected a display-message command");
+        let message = shell_words::split(command).unwrap().pop().unwrap();
+
+        assert!(
+            message.starts_with(
+                "#[bg=red,fg=white,bold][tmux-fingers-rs]#[bg=red,fg=black,nobold] boom"
+            )
+        );
+        // Padded to twice the pane width so the banner fills the status line.
+        assert_eq!(message.chars().count(), 100);
+        assert!(message.ends_with(' '));
+    }
+
+    #[test]
+    fn action_error_message_is_not_truncated_for_narrow_panes() {
+        let tmux = crate::tmux::Tmux::fake("3.3a");
+        let long = "x".repeat(100);
+        report_action_error(&tmux, 1, &long).unwrap();
+
+        let executed = tmux.executed_commands();
+        assert!(executed.iter().any(|cmd| cmd.contains(&long)));
     }
 
     #[test]

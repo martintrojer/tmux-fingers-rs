@@ -56,6 +56,7 @@ impl MatchFormatter {
 
     fn before_offset(&self, offset: Option<(usize, usize)>, highlight: &str) -> String {
         offset
+            .filter(|(start, _)| *start != 0)
             .map(|(start, _)| {
                 format!(
                     "{}{}",
@@ -108,13 +109,21 @@ impl MatchFormatter {
 
         if self.hint_position == "right" {
             format!(
-                "{}{}{}{}",
-                highlight_pair, self.reset_sequence, hint_pair, self.reset_sequence
+                "{}{}{}{}{}",
+                self.reset_sequence,
+                highlight_pair,
+                self.reset_sequence,
+                hint_pair,
+                self.reset_sequence
             )
         } else {
             format!(
-                "{}{}{}{}",
-                hint_pair, self.reset_sequence, highlight_pair, self.reset_sequence
+                "{}{}{}{}{}",
+                self.reset_sequence,
+                hint_pair,
+                self.reset_sequence,
+                highlight_pair,
+                self.reset_sequence
             )
         }
     }
@@ -135,24 +144,32 @@ mod tests {
     use super::MatchFormatter;
 
     struct SetupOptions<'a> {
-        hint_style: &'a str,
-        highlight_style: &'a str,
         hint_position: &'a str,
-        selected_hint_style: &'a str,
-        selected_highlight_style: &'a str,
         selected: bool,
         offset: Option<(usize, usize)>,
         hint: &'a str,
         highlight: &'a str,
     }
 
+    impl Default for SetupOptions<'_> {
+        fn default() -> Self {
+            Self {
+                hint_position: "left",
+                selected: false,
+                offset: None,
+                hint: "a",
+                highlight: "yolo",
+            }
+        }
+    }
+
     fn setup(options: SetupOptions<'_>) -> String {
         let formatter = MatchFormatter::new(
-            options.hint_style,
-            options.highlight_style,
-            options.selected_hint_style,
-            options.selected_highlight_style,
-            "#[bg=black,fg=white]",
+            "#[hint]",
+            "#[highlight]",
+            "#[selected_hint]",
+            "#[selected_highlight]",
+            "#[backdrop]",
             options.hint_position,
             "#[reset]",
         );
@@ -168,76 +185,62 @@ mod tests {
     #[test]
     fn places_hint_on_left() {
         let result = setup(SetupOptions {
-            hint_style: "#[fg=yellow,bold]",
-            highlight_style: "#[fg=yellow]",
             hint_position: "left",
-            selected_hint_style: "#[fg=green,bold]",
-            selected_highlight_style: "#[fg=green]",
-            selected: false,
-            offset: None,
-            hint: "a",
-            highlight: "yolo",
+            ..SetupOptions::default()
         });
         assert_eq!(
             result,
-            "#[reset]#[fg=yellow,bold]a#[reset]#[fg=yellow]olo#[reset]#[bg=black,fg=white]"
+            "#[reset]#[reset]#[hint]a#[reset]#[highlight]olo#[reset]#[backdrop]"
         );
     }
 
     #[test]
     fn places_hint_on_right() {
         let result = setup(SetupOptions {
-            hint_style: "#[fg=yellow,bold]",
-            highlight_style: "#[fg=yellow]",
             hint_position: "right",
-            selected_hint_style: "#[fg=green,bold]",
-            selected_highlight_style: "#[fg=green]",
-            selected: false,
-            offset: None,
-            hint: "a",
-            highlight: "yolo",
+            ..SetupOptions::default()
         });
         assert_eq!(
             result,
-            "#[reset]#[fg=yellow]yol#[reset]#[fg=yellow,bold]a#[reset]#[bg=black,fg=white]"
+            "#[reset]#[reset]#[highlight]yol#[reset]#[hint]a#[reset]#[backdrop]"
         );
     }
 
     #[test]
     fn selects_correct_style() {
         let result = setup(SetupOptions {
-            hint_style: "#[fg=yellow,bold]",
-            highlight_style: "#[fg=yellow]",
-            hint_position: "left",
-            selected_hint_style: "#[fg=green,bold]",
-            selected_highlight_style: "#[fg=green]",
             selected: true,
-            offset: None,
-            hint: "a",
-            highlight: "yolo",
+            ..SetupOptions::default()
         });
         assert_eq!(
             result,
-            "#[reset]#[fg=green,bold]a#[reset]#[fg=green]olo#[reset]#[bg=black,fg=white]"
+            "#[reset]#[reset]#[selected_hint]a#[reset]#[selected_highlight]olo#[reset]#[backdrop]"
         );
     }
 
     #[test]
     fn only_highlights_offset() {
         let result = setup(SetupOptions {
-            hint_style: "#[fg=yellow,bold]",
-            highlight_style: "#[fg=yellow]",
-            hint_position: "left",
-            selected_hint_style: "#[fg=green,bold]",
-            selected_highlight_style: "#[fg=green]",
-            selected: false,
             offset: Some((1, 5)),
-            hint: "a",
             highlight: "yoloyoloyolo",
+            ..SetupOptions::default()
         });
         assert_eq!(
             result,
-            "#[reset]#[bg=black,fg=white]y#[fg=yellow,bold]a#[reset]#[fg=yellow]loyo#[reset]#[bg=black,fg=white]loyolo#[bg=black,fg=white]"
+            "#[reset]#[backdrop]y#[reset]#[hint]a#[reset]#[highlight]loyo#[reset]#[backdrop]loyolo#[backdrop]"
+        );
+    }
+
+    #[test]
+    fn only_highlights_offset_at_the_beginning() {
+        let result = setup(SetupOptions {
+            offset: Some((0, 3)),
+            highlight: "yolo",
+            ..SetupOptions::default()
+        });
+        assert_eq!(
+            result,
+            "#[reset]#[reset]#[hint]a#[reset]#[highlight]ol#[reset]#[backdrop]o#[backdrop]"
         );
     }
 }

@@ -3,7 +3,7 @@ use std::env;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 
-use crate::tmux_style_printer::{Shell, TmuxStylePrinter};
+use crate::tmux_style_printer::TmuxStylePrinter;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pane {
@@ -156,7 +156,7 @@ impl Tmux {
     }
 
     pub fn parse_style(&self, style: &str) -> Result<String, String> {
-        let mut printer = TmuxStylePrinter::new(TputShell);
+        let mut printer = TmuxStylePrinter::new();
         printer.print(style, false)
     }
 
@@ -343,25 +343,6 @@ impl Tmux {
             shell_words::quote(filter)
         ))?;
         output.lines().map(parse_pane).collect()
-    }
-}
-
-struct TputShell;
-
-impl Shell for TputShell {
-    fn exec(&self, cmd: &str) -> Result<String, String> {
-        let output = Command::new("/bin/sh")
-            .arg("-lc")
-            .arg(cmd)
-            .output()
-            .map_err(|err| err.to_string())?;
-        if output.status.success() {
-            Ok(String::from_utf8_lossy(&output.stdout)
-                .trim_end()
-                .to_string())
-        } else {
-            Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
-        }
     }
 }
 

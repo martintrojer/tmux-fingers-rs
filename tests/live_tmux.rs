@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
@@ -588,7 +589,7 @@ fn custom_shell_action_receives_match_on_stdin() {
 }
 
 #[test]
-fn failed_start_still_restores_tmux_state() {
+fn failed_action_is_reported_and_still_restores_tmux_state() {
     let socket = unique_name("tmux-fingers-rs");
     let session = unique_name("session");
     let state_home = short_state_home();
@@ -631,17 +632,22 @@ fn failed_start_still_restores_tmux_state() {
             "#{pane_id}",
         ],
     );
-    let mut start = spawn_binary(
-        &bin,
-        &state_home,
-        &socket,
-        &[
+    // Since upstream 2.7.1 (`add error handling and reporting when running
+    // actions`), a failing action is reported rather than aborting the run, so
+    // `start` exits 0 and teardown still restores tmux state.
+    let mut start = Command::new(&bin)
+        .args([
             "start",
             "--main-action",
             "/definitely/missing/tmux-fingers-bin",
             &pane_id,
-        ],
-    );
+        ])
+        .env("XDG_STATE_HOME", &state_home)
+        .env("FINGERS_TMUX_SOCKET", format!("-L {socket}"))
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn binary");
+    let mut start_stderr = start.stderr.take().expect("piped stderr");
 
     let socket_path = socket_path(&state_home);
     wait_for_socket(&socket_path);
@@ -659,7 +665,16 @@ fn failed_start_still_restores_tmux_state() {
     );
 
     let status = start.wait().expect("wait for start");
-    assert!(!status.success());
+    assert!(status.success(), "start should not abort on action failure");
+
+    let mut stderr = String::new();
+    start_stderr
+        .read_to_string(&mut stderr)
+        .expect("read stderr");
+    assert!(
+        stderr.contains("[tmux-fingers-rs] error processing result:"),
+        "expected the action failure to be reported, got: {stderr}"
+    );
 
     let windows = tmux(&socket, &["list-windows", "-F", "#{window_name}"]);
     assert!(!windows.lines().any(|name| name == "[fingers]"));
