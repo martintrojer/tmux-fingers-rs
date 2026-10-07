@@ -216,7 +216,17 @@ fn load_config_and_start_work_against_live_tmux() {
     run_load_config(&bin, &state_home, &socket);
 
     let fingers_keys = tmux(&socket, &["list-keys", "-T", "fingers"]);
-    assert!(fingers_keys.contains("send-input"), "{fingers_keys}");
+    assert!(
+        fingers_keys.contains("send-input hint:a:main"),
+        "{fingers_keys}"
+    );
+    let prefix_keys = tmux(&socket, &["list-keys", "-T", "prefix"]);
+    assert!(
+        prefix_keys.lines().any(|line| {
+            line.starts_with("bind-key ") && line.contains(" F ") && line.contains(" start ")
+        }),
+        "{prefix_keys}"
+    );
     assert_eq!(
         tmux(&socket, &["show-option", "-gv", "@fingers-cli"]),
         bin.to_string_lossy()

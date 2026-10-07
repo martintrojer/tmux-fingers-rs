@@ -224,7 +224,7 @@ pub(crate) fn compile_pattern(patterns: &[String]) -> Result<Regex, String> {
 #[cfg(test)]
 mod tests {
     use super::{Hinter, HinterOptions, Printer};
-    use crate::fingers::config::builtin_patterns;
+    use crate::fingers::config::{Config, builtin_patterns};
 
     #[derive(Default)]
     struct TextOutput {
@@ -277,6 +277,23 @@ mod tests {
             hint_position: "left".into(),
             reset_sequence: "<reset>".into(),
         }
+    }
+
+    #[test]
+    fn default_config_does_not_panic() {
+        let config = Config::default();
+        let mut output = TextOutput::default();
+        let mut hinter = Hinter::new(
+            test_options(
+                vec!["12345".into()],
+                vec![r"\d+".into()],
+                config.alphabet,
+                false,
+            ),
+            &mut output,
+        );
+
+        hinter.run().unwrap();
     }
 
     #[test]

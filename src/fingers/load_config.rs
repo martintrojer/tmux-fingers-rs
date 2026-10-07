@@ -65,8 +65,8 @@ pub fn parse_options(options: BTreeMap<String, String>, tmux: &Tmux) -> Result<C
         }
     }
 
-    for (name, pattern) in user_defined_patterns {
-        config.patterns.insert(name, pattern);
+    for (name, pattern) in &user_defined_patterns {
+        config.patterns.insert(name.clone(), pattern.clone());
     }
 
     let builtins = builtin_patterns();
@@ -120,8 +120,20 @@ pub fn parse_options(options: BTreeMap<String, String>, tmux: &Tmux) -> Result<C
     })?;
 
     let patterns = config.patterns.values().cloned().collect::<Vec<_>>();
-    compile_pattern(&patterns)
-        .map_err(|err| format!("[tmux-fingers-rs] Invalid pattern set\n[tmux-fingers-rs] {err}"))?;
+    if let Err(err) = compile_pattern(&patterns) {
+        if let Some((name, pattern)) = user_defined_patterns
+            .iter()
+            .find(|(_, pattern)| compile_pattern(std::slice::from_ref(pattern)).is_err())
+        {
+            return Err(format!(
+                "[tmux-fingers-rs] Invalid pattern set: {}: {pattern}\n[tmux-fingers-rs] {err}",
+                option_display_name(&format!("pattern_{name}"))
+            ));
+        }
+        return Err(format!(
+            "[tmux-fingers-rs] Invalid pattern set\n[tmux-fingers-rs] {err}"
+        ));
+    }
 
     Ok(config)
 }
@@ -337,7 +349,8 @@ mod tests {
     use crate::{fingers::config::Config, tmux::Tmux};
 
     use super::{
-        option_to_method, parse_options, setup_bindings, setup_bindings_with_cli, validate_options,
+        check_pattern, option_to_method, parse_options, setup_bindings, setup_bindings_with_cli,
+        validate_options,
     };
 
     #[test]
@@ -456,11 +469,14 @@ mod tests {
     #[test]
     fn rejects_patterns_that_fail_in_the_combined_matcher() {
         for pattern in ["(*CRLF)foo", "(?x)foo # comment"] {
+            assert!(check_pattern(pattern).is_ok(), "pattern={pattern:?}");
+
             let err = parse(&[("pattern_0", pattern)]).unwrap_err();
             assert!(
-                err.contains("Invalid pattern"),
+                err.contains("@fingers-pattern-0"),
                 "pattern={pattern:?}, err={err}"
             );
+            assert!(err.contains(pattern), "pattern={pattern:?}, err={err}");
         }
     }
 

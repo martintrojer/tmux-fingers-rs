@@ -93,12 +93,28 @@ fn translate_path(path: &[usize], alphabet: &[String]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::{sync::mpsc, thread, time::Duration};
+
     use super::Huffman;
 
+    fn assert_no_hints(alphabet: Vec<String>) {
+        let (sender, receiver) = mpsc::channel();
+        thread::spawn(move || sender.send(Huffman.generate_hints(&alphabet, 5)).unwrap());
+
+        assert_eq!(
+            receiver.recv_timeout(Duration::from_millis(500)).unwrap(),
+            Vec::<String>::new()
+        );
+    }
+
     #[test]
-    fn empty_or_single_character_alphabet_has_no_hints() {
-        assert!(Huffman.generate_hints(&[], 1).is_empty());
-        assert!(Huffman.generate_hints(&["a".into()], 2).is_empty());
+    fn empty_alphabet_has_no_hints() {
+        assert_no_hints(Vec::new());
+    }
+
+    #[test]
+    fn single_character_alphabet_has_no_hints() {
+        assert_no_hints(vec!["a".to_string()]);
     }
 
     #[test]
