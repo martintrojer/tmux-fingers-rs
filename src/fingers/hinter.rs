@@ -464,6 +464,31 @@ mod tests {
     }
 
     #[test]
+    fn reuse_hints_counts_builtin_capture_text_once() {
+        let mut patterns = builtin_patterns();
+        let diff = patterns.remove("diff").unwrap().to_string();
+        let options = test_options(
+            vec![
+                "--- a/src/y.rs".into(),
+                "+++ b/src/y.rs".into(),
+                "        modified:   src/y.rs".into(),
+            ],
+            std::iter::once(diff)
+                .chain(patterns.values().map(|pattern| pattern.to_string()))
+                .collect(),
+            vec!["a".into(), "s".into()],
+            true,
+        );
+
+        let (_, targets) = render(options);
+
+        assert_eq!(
+            targets,
+            BTreeMap::from([("s".into(), target_at("src/y.rs", "s", 2, 20))])
+        );
+    }
+
+    #[test]
     fn combined_builtins_capture_git_branch() {
         assert_eq!(
             render_with_all_builtin_patterns(
