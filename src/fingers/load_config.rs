@@ -2,17 +2,19 @@ use std::collections::BTreeMap;
 
 use pcre2::bytes::Regex;
 
-use crate::fingers::config::{Config, alphabet_map, builtin_patterns};
+use crate::fingers::config::{
+    Config, DISALLOWED_CHARS, alphabet_map, builtin_patterns, hint_alphabet,
+};
+use crate::fingers::hinter::compile_pattern;
 use crate::tmux::Tmux;
 
 const PRIVATE_OPTIONS: &[&str] = &["skip_wizard", "cli"];
-const DISALLOWED_CHARS: &[char] = &['c', 'i', 'm', 'q', 'n'];
 const HINT_POSITIONS: &[&str] = &["left", "right"];
 const BUILTIN_ACTIONS: &[&str] = &[":copy:", ":open:", ":paste:"];
 
 pub fn run_load_config(tmux: &Tmux) -> Result<Config, String> {
     let option_names = tmux.fingers_option_names()?;
-    validate_options(&option_names, tmux)?;
+    validate_options(&option_names)?;
     let options = shell_safe_options(tmux, &option_names)?;
     let config = parse_options(options, tmux)?;
     config.save().map_err(|err| err.to_string())?;
@@ -102,33 +104,29 @@ pub fn parse_options(options: BTreeMap<String, String>, tmux: &Tmux) -> Result<C
         }
     }
 
-    let alphabet = alphabet_map()
-        .get(config.keyboard_layout.as_str())
-        .copied()
-        .ok_or_else(|| {
-            invalid_value(
-                "keyboard_layout",
-                &config.keyboard_layout,
-                &format!(
-                    "expected one of: {}",
-                    alphabet_map()
-                        .keys()
-                        .copied()
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-            )
-        })?;
-    config.alphabet = alphabet
-        .chars()
-        .filter(|ch| !DISALLOWED_CHARS.contains(ch))
-        .map(|ch| ch.to_string())
-        .collect();
+    config.alphabet = hint_alphabet(&config.keyboard_layout).ok_or_else(|| {
+        invalid_value(
+            "keyboard_layout",
+            &config.keyboard_layout,
+            &format!(
+                "expected one of: {}",
+                alphabet_map()
+                    .keys()
+                    .copied()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        )
+    })?;
+
+    let patterns = config.patterns.values().cloned().collect::<Vec<_>>();
+    compile_pattern(&patterns)
+        .map_err(|err| format!("[tmux-fingers-rs] Invalid pattern set\n[tmux-fingers-rs] {err}"))?;
 
     Ok(config)
 }
 
-pub fn validate_options(option_names: &[String], tmux: &Tmux) -> Result<(), String> {
+pub fn validate_options(option_names: &[String]) -> Result<(), String> {
     let mut errors = Vec::new();
     for option in option_names {
         let option_method = option_to_method(option);
@@ -137,8 +135,6 @@ pub fn validate_options(option_names: &[String], tmux: &Tmux) -> Result<(), Stri
             && !PRIVATE_OPTIONS.contains(&option_method.as_str())
         {
             errors.push(format!("'{}' is not a valid option", option));
-            tmux.exec(&format!("set-option -ug {}", option))
-                .map_err(|err| err.to_string())?;
         }
     }
 
@@ -172,7 +168,15 @@ fn setup_bindings_with_cli(tmux: &Tmux, config: &Config, cli: &str) -> Result<()
     ));
     // One tmux invocation for all ~110 commands: spawning a shell + tmux client
     // per bind-key made load-config take ~1s, blocking tmux server startup.
-    tmux.exec_batch(&cmds)?;
+    if let Err(batch_error) = tmux.exec_batch(&cmds) {
+        let errors = cmds
+            .iter()
+            .filter_map(|cmd| tmux.exec(cmd).err())
+            .collect::<Vec<_>>();
+        if !errors.is_empty() {
+            return Err(format!("{batch_error}\n{}", errors.join("\n")));
+        }
+    }
     Ok(())
 }
 
@@ -450,6 +454,28 @@ mod tests {
     }
 
     #[test]
+    fn rejects_patterns_that_fail_in_the_combined_matcher() {
+        for pattern in ["(*CRLF)foo", "(?x)foo # comment"] {
+            let err = parse(&[("pattern_0", pattern)]).unwrap_err();
+            assert!(
+                err.contains("Invalid pattern"),
+                "pattern={pattern:?}, err={err}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_an_invalid_pattern_even_if_another_pattern_balances_it() {
+        let err = parse(&[
+            ("enabled_builtin_patterns", ""),
+            ("pattern_0", "(foo"),
+            ("pattern_1", "bar)"),
+        ])
+        .unwrap_err();
+        assert!(err.contains("Invalid pattern"), "{err}");
+    }
+
+    #[test]
     fn validates_each_enabled_builtin_pattern_name() {
         let err = parse(&[("enabled_builtin_patterns", "ip,nope,diff")]).unwrap_err();
         assert!(err.contains("@fingers-enabled-builtin-patterns"), "{err}");
@@ -486,15 +512,22 @@ mod tests {
     }
 
     #[test]
-    fn invalid_options_are_reported_and_unset() {
-        let tmux = Tmux::fake("3.3a");
-        let error = validate_options(&["@fingers-nope".to_string()], &tmux).unwrap_err();
+    fn invalid_options_are_reported_but_not_unset() {
+        let error =
+            validate_options(&["@fingers-nope".to_string(), "@fingers-alphabet".to_string()])
+                .unwrap_err();
         assert!(error.contains("'@fingers-nope' is not a valid option"));
-        assert!(
-            tmux.executed_commands()
-                .iter()
-                .any(|cmd| cmd == "set-option -ug @fingers-nope")
-        );
+        assert!(error.contains("'@fingers-alphabet' is not a valid option"));
+    }
+
+    #[test]
+    fn tmux_version_and_pattern_options_are_valid() {
+        validate_options(&[
+            "@fingers-tmux-version".to_string(),
+            "@fingers-patterns".to_string(),
+            "@fingers-pattern-0".to_string(),
+        ])
+        .unwrap();
     }
 
     #[test]
@@ -506,6 +539,8 @@ mod tests {
         };
         setup_bindings(&tmux, &config).unwrap();
         let executed = tmux.executed_commands();
+        assert_eq!(executed.len(), 1);
+        assert!(executed[0].contains(" \\; "));
         assert!(
             executed
                 .iter()

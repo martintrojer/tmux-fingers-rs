@@ -126,13 +126,6 @@ impl Tmux {
     /// tmux's `;` separator. Each command is a shell-quoted tmux command line,
     /// as accepted by [`Tmux::exec`].
     pub fn exec_batch(&self, cmds: &[String]) -> Result<String, String> {
-        if self.version_override.is_some() {
-            let mut out = Vec::new();
-            for cmd in cmds {
-                out.push(self.exec(cmd)?);
-            }
-            return Ok(out.join("\n"));
-        }
         if cmds.is_empty() {
             return Ok(String::new());
         }

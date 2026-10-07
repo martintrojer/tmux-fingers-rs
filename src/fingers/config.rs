@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::fingers::dirs;
 
 pub const ANSI_RESET: &str = "\u{1b}[0m";
+pub(crate) const DISALLOWED_CHARS: &[char] = &['c', 'i', 'm', 'q', 'n'];
 
 // Upstream computes the default styles by running them through the tmux style
 // printer (`Tmux.style_printer.print("fg=green,bold")` and friends), which
@@ -50,7 +51,7 @@ impl Default for Config {
             jump_key: "J".into(),
             keyboard_layout: "qwerty".into(),
             patterns: BTreeMap::new(),
-            alphabet: Vec::new(),
+            alphabet: hint_alphabet("qwerty").expect("qwerty alphabet"),
             benchmark_mode: "0".into(),
             main_action: ":copy:".into(),
             ctrl_action: ":open:".into(),
@@ -89,7 +90,6 @@ impl Config {
             "jump_key",
             "keyboard_layout",
             "patterns",
-            "alphabet",
             "benchmark_mode",
             "main_action",
             "ctrl_action",
@@ -151,6 +151,16 @@ pub fn builtin_patterns() -> BTreeMap<&'static str, &'static str> {
         ),
         ("diff", r"(---|\+\+\+) [ab]/(?<match>.*)"),
     ])
+}
+
+pub fn hint_alphabet(layout: &str) -> Option<Vec<String>> {
+    alphabet_map().get(layout).map(|alphabet| {
+        alphabet
+            .chars()
+            .filter(|ch| !DISALLOWED_CHARS.contains(ch))
+            .map(|ch| ch.to_string())
+            .collect()
+    })
 }
 
 pub fn alphabet_map() -> BTreeMap<&'static str, &'static str> {

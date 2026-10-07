@@ -215,6 +215,13 @@ fn load_config_and_start_work_against_live_tmux() {
     let bin = binary();
     run_load_config(&bin, &state_home, &socket);
 
+    let fingers_keys = tmux(&socket, &["list-keys", "-T", "fingers"]);
+    assert!(fingers_keys.contains("send-input"), "{fingers_keys}");
+    assert_eq!(
+        tmux(&socket, &["show-option", "-gv", "@fingers-cli"]),
+        bin.to_string_lossy()
+    );
+
     let pane_id = tmux(
         &socket,
         &[
@@ -323,6 +330,42 @@ fn echoing_login_profile_does_not_break_load_config_or_start() {
     );
     assert!(start.wait().expect("wait for start").success());
     assert_eq!(tmux(&socket, &["show-buffer"]), "12345");
+
+    cleanup(&socket, client, &state_home);
+}
+
+#[test]
+fn invalid_root_key_does_not_disable_other_bindings() {
+    let socket = unique_name("tmux-fingers-rs-invalid-key");
+    let session = unique_name("session");
+    let state_home = short_state_home();
+    fs::create_dir_all(&state_home).unwrap();
+
+    setup_server(&socket, &session, "exec cat");
+    let client = attach_control_client(&socket, &session);
+    thread::sleep(Duration::from_millis(200));
+    tmux(&socket, &["set-option", "-g", "@fingers-key", "NotAKey"]);
+
+    let bin = binary();
+    let load = fingers(&bin, &state_home, &socket)
+        .arg("load-config")
+        .output()
+        .expect("run load-config");
+    assert!(!load.status.success());
+    assert!(
+        String::from_utf8_lossy(&load.stderr).contains("unknown key: NotAKey"),
+        "{}",
+        String::from_utf8_lossy(&load.stderr)
+    );
+
+    let fingers_keys = tmux(&socket, &["list-keys", "-T", "fingers"]);
+    assert!(fingers_keys.contains("send-input"), "{fingers_keys}");
+    let prefix_keys = tmux(&socket, &["list-keys", "-T", "prefix"]);
+    assert!(prefix_keys.contains("start --mode jump"), "{prefix_keys}");
+    assert_eq!(
+        tmux(&socket, &["show-option", "-gv", "@fingers-cli"]),
+        bin.to_string_lossy()
+    );
 
     cleanup(&socket, client, &state_home);
 }

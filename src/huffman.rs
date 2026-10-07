@@ -17,6 +17,9 @@ pub struct Huffman;
 
 impl Huffman {
     pub fn generate_hints(&self, alphabet: &[String], n: usize) -> Vec<String> {
+        if alphabet.len() < 2 {
+            return Vec::new();
+        }
         if n <= alphabet.len() {
             return alphabet.to_vec();
         }
@@ -91,6 +94,24 @@ fn translate_path(path: &[usize], alphabet: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::Huffman;
+
+    #[test]
+    fn empty_or_single_character_alphabet_has_no_hints() {
+        assert!(Huffman.generate_hints(&[], 1).is_empty());
+        assert!(Huffman.generate_hints(&["a".into()], 2).is_empty());
+    }
+
+    #[test]
+    fn default_config_alphabet_generates_hints() {
+        let config = crate::fingers::config::Config::default();
+        assert_eq!(
+            Huffman.generate_hints(&config.alphabet, 1),
+            vec![
+                "a", "s", "d", "f", "w", "e", "r", "z", "x", "v", "j", "k", "l", "u", "o", "p",
+                "g", "h", "t", "y", "b"
+            ]
+        );
+    }
 
     #[test]
     fn generates_hints_for_5() {

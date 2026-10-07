@@ -217,7 +217,7 @@ impl<'a, P: Printer> Hinter<'a, P> {
     }
 }
 
-fn compile_pattern(patterns: &[String]) -> Result<Regex, String> {
+pub(crate) fn compile_pattern(patterns: &[String]) -> Result<Regex, String> {
     Regex::new(&format!("(?J)({})", patterns.join("|"))).map_err(|err| err.to_string())
 }
 
