@@ -55,7 +55,7 @@ fn remove_socket_file(path: &Path) -> std::io::Result<()> {
 mod tests {
     use std::sync::mpsc;
     use std::thread;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use super::InputSocket;
 
@@ -76,8 +76,16 @@ mod tests {
                 .unwrap();
         });
 
-        thread::sleep(Duration::from_millis(100));
-        sender.send_message("hey").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match sender.send_message("hey") {
+                Ok(()) => break,
+                Err(_) if Instant::now() < deadline => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(err) => panic!("socket never became ready: {err}"),
+            }
+        }
         assert_eq!(rx.recv_timeout(Duration::from_secs(2)).unwrap(), "hey");
         handle.join().unwrap();
     }

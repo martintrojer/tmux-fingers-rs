@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Per-process sequence for unique names. Not the clock: macOS `SystemTime`
 /// has only microsecond resolution, so clock-derived names collided when
@@ -60,7 +60,28 @@ fn binary() -> PathBuf {
         .expect("compiled binary path")
 }
 
-fn setup_server(socket: &str, session: &str, command: &str) {
+struct ServerGuard {
+    socket: String,
+    client: Option<Child>,
+    state_home: PathBuf,
+}
+
+impl Drop for ServerGuard {
+    fn drop(&mut self) {
+        if let Some(client) = &mut self.client {
+            let _ = client.kill();
+            let _ = client.wait();
+        }
+        let _ = Command::new("tmux")
+            .arg("-L")
+            .arg(&self.socket)
+            .arg("kill-server")
+            .status();
+        let _ = fs::remove_dir_all(&self.state_home);
+    }
+}
+
+fn setup_server(socket: &str, session: &str, state_home: &Path, command: &str) -> ServerGuard {
     let output = Command::new("tmux")
         .arg("-L")
         .arg(socket)
@@ -74,19 +95,37 @@ fn setup_server(socket: &str, session: &str, command: &str) {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-}
 
-fn attach_control_client(socket: &str, session: &str) -> Child {
-    Command::new("tmux")
-        .arg("-L")
-        .arg(socket)
-        .arg("-C")
-        .args(["attach-session", "-t", session])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("attach control client")
+    let mut server = ServerGuard {
+        socket: socket.to_string(),
+        client: None,
+        state_home: state_home.to_path_buf(),
+    };
+    server.client = Some(
+        Command::new("tmux")
+            .arg("-L")
+            .arg(socket)
+            .arg("-C")
+            .args(["attach-session", "-t", session])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("attach control client"),
+    );
+    wait_until(
+        Duration::from_secs(5),
+        "control client did not attach",
+        || {
+            Command::new("tmux")
+                .arg("-L")
+                .arg(socket)
+                .args(["list-clients", "-F", "#{client_name}"])
+                .output()
+                .is_ok_and(|output| output.status.success() && !output.stdout.is_empty())
+        },
+    );
+    server
 }
 
 /// A `Command` for the binary under test, pointed at the test's tmux socket
@@ -120,6 +159,23 @@ impl std::ops::Deref for KillOnDrop {
 impl std::ops::DerefMut for KillOnDrop {
     fn deref_mut(&mut self) -> &mut Child {
         &mut self.0
+    }
+}
+
+impl KillOnDrop {
+    fn wait_bounded(&mut self) -> std::process::ExitStatus {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(status) = self.0.try_wait().expect("poll start process") {
+                return status;
+            }
+            if Instant::now() >= deadline {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+                panic!("start process did not exit within 5 seconds");
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
     }
 }
 
@@ -158,25 +214,37 @@ fn socket_path(state_home: &Path) -> PathBuf {
         .join("fingers.sock")
 }
 
-fn wait_for_socket(socket_path: &Path) {
-    for _ in 0..50 {
-        if socket_path.exists() {
-            return;
-        }
+fn wait_until(timeout: Duration, message: &str, mut ready: impl FnMut() -> bool) {
+    let deadline = Instant::now() + timeout;
+    while !ready() {
+        assert!(Instant::now() < deadline, "{message}");
         thread::sleep(Duration::from_millis(20));
     }
-    panic!("socket not created: {}", socket_path.display());
 }
 
-fn cleanup(socket: &str, mut client: Child, state_home: &Path) {
-    let _ = client.kill();
-    let _ = client.wait();
-    let _ = Command::new("tmux")
-        .arg("-L")
-        .arg(socket)
-        .arg("kill-server")
-        .status();
-    let _ = fs::remove_dir_all(state_home);
+fn wait_for_socket(socket_path: &Path) {
+    wait_until(Duration::from_secs(1), "socket not created", || {
+        socket_path.exists()
+    });
+}
+
+fn wait_for_pane_text(socket: &str, session: &str, expected: &str) -> String {
+    let mut contents = String::new();
+    wait_until(
+        Duration::from_secs(5),
+        &format!("pane did not contain {expected:?} within 5 seconds"),
+        || {
+            let output = Command::new("tmux")
+                .arg("-L")
+                .arg(socket)
+                .args(["capture-pane", "-p", "-t", &format!("{session}:0.0")])
+                .output()
+                .expect("capture pane");
+            contents = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            output.status.success() && contents.contains(expected)
+        },
+    );
+    contents
 }
 
 #[test]
@@ -186,9 +254,8 @@ fn load_config_and_start_work_against_live_tmux() {
     let state_home = short_state_home();
     fs::create_dir_all(&state_home).unwrap();
 
-    setup_server(&socket, &session, "printf '12345\n'; exec cat");
-    let client = attach_control_client(&socket, &session);
-    thread::sleep(Duration::from_millis(200));
+    let client = setup_server(&socket, &session, &state_home, "printf '12345\n'; exec cat");
+    wait_for_pane_text(&socket, &session, "12345");
 
     tmux(
         &socket,
@@ -205,7 +272,7 @@ fn load_config_and_start_work_against_live_tmux() {
     );
     tmux(
         &socket,
-        &["set-option", "-g", "@fingers-show-copied-notification", "0"],
+        &["set-option", "-g", "@fingers-show-copied-notification", "1"],
     );
     tmux(
         &socket,
@@ -257,14 +324,16 @@ fn load_config_and_start_work_against_live_tmux() {
         String::from_utf8_lossy(&send.stderr)
     );
 
-    let status = start.wait().expect("wait for start");
+    let status = start.wait_bounded();
     assert!(status.success());
 
     assert_eq!(tmux(&socket, &["show-buffer"]), "12345");
+    let messages = tmux(&socket, &["show-messages"]);
+    assert!(messages.contains("Copied: 12345"), "{messages}");
     let windows = tmux(&socket, &["list-windows", "-F", "#{window_name}"]);
     assert!(!windows.lines().any(|name| name == "[fingers]"));
 
-    cleanup(&socket, client, &state_home);
+    drop(client);
 }
 
 #[test]
@@ -276,9 +345,8 @@ fn echoing_login_profile_does_not_break_load_config_or_start() {
     fs::create_dir_all(&home).unwrap();
     fs::write(home.join(".profile"), "echo hello-from-profile\n").unwrap();
 
-    setup_server(&socket, &session, "printf '12345\n'; exec cat");
-    let client = attach_control_client(&socket, &session);
-    thread::sleep(Duration::from_millis(200));
+    let client = setup_server(&socket, &session, &state_home, "printf '12345\n'; exec cat");
+    wait_for_pane_text(&socket, &session, "12345");
 
     tmux(
         &socket,
@@ -338,10 +406,10 @@ fn echoing_login_profile_does_not_break_load_config_or_start() {
         "{}",
         String::from_utf8_lossy(&send.stderr)
     );
-    assert!(start.wait().expect("wait for start").success());
+    assert!(start.wait_bounded().success());
     assert_eq!(tmux(&socket, &["show-buffer"]), "12345");
 
-    cleanup(&socket, client, &state_home);
+    drop(client);
 }
 
 #[test]
@@ -351,9 +419,7 @@ fn invalid_root_key_does_not_disable_other_bindings() {
     let state_home = short_state_home();
     fs::create_dir_all(&state_home).unwrap();
 
-    setup_server(&socket, &session, "exec cat");
-    let client = attach_control_client(&socket, &session);
-    thread::sleep(Duration::from_millis(200));
+    let client = setup_server(&socket, &session, &state_home, "exec cat");
     tmux(&socket, &["set-option", "-g", "@fingers-key", "NotAKey"]);
 
     let bin = binary();
@@ -377,7 +443,7 @@ fn invalid_root_key_does_not_disable_other_bindings() {
         bin.to_string_lossy()
     );
 
-    cleanup(&socket, client, &state_home);
+    drop(client);
 }
 
 #[test]
@@ -387,9 +453,13 @@ fn multimode_selects_multiple_matches() {
     let state_home = short_state_home();
     fs::create_dir_all(&state_home).unwrap();
 
-    setup_server(&socket, &session, "printf '12345 67890\n'; exec cat");
-    let client = attach_control_client(&socket, &session);
-    thread::sleep(Duration::from_millis(200));
+    let client = setup_server(
+        &socket,
+        &session,
+        &state_home,
+        "printf '12345 67890\n'; exec cat",
+    );
+    wait_for_pane_text(&socket, &session, "12345 67890");
 
     tmux(
         &socket,
@@ -443,10 +513,10 @@ fn multimode_selects_multiple_matches() {
         );
     }
 
-    assert!(start.wait().expect("wait for start").success());
+    assert!(start.wait_bounded().success());
     assert_eq!(tmux(&socket, &["show-buffer"]), "12345 67890");
 
-    cleanup(&socket, client, &state_home);
+    drop(client);
 }
 
 #[test]
@@ -456,9 +526,8 @@ fn jump_mode_enters_copy_mode_on_selection() {
     let state_home = short_state_home();
     fs::create_dir_all(&state_home).unwrap();
 
-    setup_server(&socket, &session, "printf '12345\n'; exec cat");
-    let client = attach_control_client(&socket, &session);
-    thread::sleep(Duration::from_millis(200));
+    let client = setup_server(&socket, &session, &state_home, "printf '12345\n'; exec cat");
+    wait_for_pane_text(&socket, &session, "12345");
 
     tmux(
         &socket,
@@ -510,7 +579,7 @@ fn jump_mode_enters_copy_mode_on_selection() {
         String::from_utf8_lossy(&send.stderr)
     );
 
-    assert!(start.wait().expect("wait for start").success());
+    assert!(start.wait_bounded().success());
     let pane_in_mode = tmux(
         &socket,
         &[
@@ -523,7 +592,7 @@ fn jump_mode_enters_copy_mode_on_selection() {
     );
     assert_eq!(pane_in_mode, "1");
 
-    cleanup(&socket, client, &state_home);
+    drop(client);
 }
 
 #[test]
@@ -533,13 +602,13 @@ fn custom_pattern_is_loaded_and_selected() {
     let state_home = short_state_home();
     fs::create_dir_all(&state_home).unwrap();
 
-    setup_server(
+    let client = setup_server(
         &socket,
         &session,
+        &state_home,
         "printf 'deploy abc-123 done\n'; exec cat",
     );
-    let client = attach_control_client(&socket, &session);
-    thread::sleep(Duration::from_millis(200));
+    wait_for_pane_text(&socket, &session, "deploy abc-123 done");
 
     tmux(
         &socket,
@@ -590,10 +659,10 @@ fn custom_pattern_is_loaded_and_selected() {
         String::from_utf8_lossy(&send.stderr)
     );
 
-    assert!(start.wait().expect("wait for start").success());
+    assert!(start.wait_bounded().success());
     assert_eq!(tmux(&socket, &["show-buffer"]), "abc-123");
 
-    cleanup(&socket, client, &state_home);
+    drop(client);
 }
 
 #[test]
@@ -603,9 +672,8 @@ fn paste_action_pastes_match_into_pane() {
     let state_home = short_state_home();
     fs::create_dir_all(&state_home).unwrap();
 
-    setup_server(&socket, &session, "printf '12345\n'; exec cat");
-    let client = attach_control_client(&socket, &session);
-    thread::sleep(Duration::from_millis(200));
+    let client = setup_server(&socket, &session, &state_home, "printf '12345\n'; exec cat");
+    wait_for_pane_text(&socket, &session, "12345");
 
     tmux(
         &socket,
@@ -657,18 +725,14 @@ fn paste_action_pastes_match_into_pane() {
         String::from_utf8_lossy(&send.stderr)
     );
 
-    assert!(start.wait().expect("wait for start").success());
-    thread::sleep(Duration::from_millis(100));
-    let pane_text = tmux(
-        &socket,
-        &["capture-pane", "-p", "-t", &format!("{session}:0.0")],
-    );
+    assert!(start.wait_bounded().success());
+    let pane_text = wait_for_pane_text(&socket, &session, "12345\n12345");
     assert!(
         pane_text.contains("12345\n12345"),
         "pane_text={pane_text:?}"
     );
 
-    cleanup(&socket, client, &state_home);
+    drop(client);
 }
 
 #[test]
@@ -678,9 +742,8 @@ fn paste_action_cancels_copy_mode_before_pasting() {
     let state_home = short_state_home();
     fs::create_dir_all(&state_home).unwrap();
 
-    setup_server(&socket, &session, "printf '12345\n'; exec cat");
-    let client = attach_control_client(&socket, &session);
-    thread::sleep(Duration::from_millis(200));
+    let client = setup_server(&socket, &session, &state_home, "printf '12345\n'; exec cat");
+    wait_for_pane_text(&socket, &session, "12345");
 
     tmux(
         &socket,
@@ -732,18 +795,14 @@ fn paste_action_cancels_copy_mode_before_pasting() {
         String::from_utf8_lossy(&send.stderr)
     );
 
-    assert!(start.wait().expect("wait for start").success());
-    thread::sleep(Duration::from_millis(100));
-    let pane_text = tmux(
-        &socket,
-        &["capture-pane", "-p", "-t", &format!("{session}:0.0")],
-    );
+    assert!(start.wait_bounded().success());
+    let pane_text = wait_for_pane_text(&socket, &session, "12345\n12345");
     assert!(
         pane_text.contains("12345\n12345"),
         "pane_text={pane_text:?}"
     );
 
-    cleanup(&socket, client, &state_home);
+    drop(client);
 }
 
 #[test]
@@ -754,9 +813,8 @@ fn custom_shell_action_receives_match_on_stdin() {
     fs::create_dir_all(&state_home).unwrap();
     let output_path = state_home.join("action-output.txt");
 
-    setup_server(&socket, &session, "printf '12345\n'; exec cat");
-    let client = attach_control_client(&socket, &session);
-    thread::sleep(Duration::from_millis(200));
+    let client = setup_server(&socket, &session, &state_home, "printf '12345\n'; exec cat");
+    wait_for_pane_text(&socket, &session, "12345");
 
     tmux(
         &socket,
@@ -809,7 +867,7 @@ fn custom_shell_action_receives_match_on_stdin() {
         String::from_utf8_lossy(&send.stderr)
     );
 
-    assert!(start.wait().expect("wait for start").success());
+    assert!(start.wait_bounded().success());
     for _ in 0..20 {
         if output_path.exists() {
             break;
@@ -819,7 +877,7 @@ fn custom_shell_action_receives_match_on_stdin() {
     let written = fs::read_to_string(&output_path).expect("action output");
     assert_eq!(written, "12345");
 
-    cleanup(&socket, client, &state_home);
+    drop(client);
 }
 
 #[test]
@@ -838,9 +896,8 @@ fn assert_render_error_preserves_original_pane_and_tmux_state(zoomed: bool) {
     let state_home = short_state_home();
     fs::create_dir_all(&state_home).unwrap();
 
-    setup_server(&socket, &session, "printf '12345\n'; exec cat");
-    let client = attach_control_client(&socket, &session);
-    thread::sleep(Duration::from_millis(200));
+    let client = setup_server(&socket, &session, &state_home, "printf '12345\n'; exec cat");
+    wait_for_pane_text(&socket, &session, "12345");
 
     tmux(&socket, &["set-option", "-g", "prefix", "C-a"]);
     tmux(&socket, &["set-option", "-g", "prefix2", "C-Space"]);
@@ -903,11 +960,22 @@ fn assert_render_error_preserves_original_pane_and_tmux_state(zoomed: bool) {
         ],
     );
 
-    let start = fingers(&bin, &state_home, &socket)
-        .args(["start", &pane_id])
-        .output()
-        .expect("run start");
-    let stderr = String::from_utf8_lossy(&start.stderr).into_owned();
+    let mut start = KillOnDrop(
+        fingers(&bin, &state_home, &socket)
+            .args(["start", &pane_id])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("run start"),
+    );
+    let status = start.wait_bounded();
+    let mut stderr = String::new();
+    start
+        .stderr
+        .take()
+        .expect("piped stderr")
+        .read_to_string(&mut stderr)
+        .expect("read stderr");
     let final_layout = tmux(
         &socket,
         &[
@@ -929,9 +997,9 @@ fn assert_render_error_preserves_original_pane_and_tmux_state(zoomed: bool) {
     let saved_config: serde_json::Value =
         serde_json::from_slice(&fs::read(&config_path).unwrap()).unwrap();
 
-    cleanup(&socket, client, &state_home);
+    drop(client);
 
-    assert!(!start.status.success(), "start unexpectedly succeeded");
+    assert!(!status.success(), "start unexpectedly succeeded");
     assert!(
         stderr.contains("missing closing parenthesis"),
         "expected pattern compilation error, got: {stderr}"
@@ -953,9 +1021,8 @@ fn failed_action_is_reported_and_still_restores_tmux_state() {
     let state_home = short_state_home();
     fs::create_dir_all(&state_home).unwrap();
 
-    setup_server(&socket, &session, "printf '12345\n'; exec cat");
-    let client = attach_control_client(&socket, &session);
-    thread::sleep(Duration::from_millis(200));
+    let client = setup_server(&socket, &session, &state_home, "printf '12345\n'; exec cat");
+    wait_for_pane_text(&socket, &session, "12345");
 
     tmux(
         &socket,
@@ -1020,7 +1087,7 @@ fn failed_action_is_reported_and_still_restores_tmux_state() {
         String::from_utf8_lossy(&send.stderr)
     );
 
-    let status = start.wait().expect("wait for start");
+    let status = start.wait_bounded();
     assert!(status.success(), "start should not abort on action failure");
 
     let mut stderr = String::new();
@@ -1045,5 +1112,5 @@ fn failed_action_is_reported_and_still_restores_tmux_state() {
     );
     assert_eq!(client_state, "root;C-a;C-Space");
 
-    cleanup(&socket, client, &state_home);
+    drop(client);
 }

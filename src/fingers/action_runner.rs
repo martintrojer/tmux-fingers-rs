@@ -282,6 +282,56 @@ mod tests {
     }
 
     #[test]
+    fn jump_mode_moves_to_match_offset() {
+        let config = Config {
+            use_system_clipboard: false,
+            ..Config::default()
+        };
+        let tmux = crate::tmux::Tmux::fake("3.3a");
+        let mut runner = runner();
+        runner.mode = "jump".into();
+        runner.r#match = "match".into();
+
+        runner.run(&config, &tmux).unwrap();
+
+        let commands = tmux.executed_commands();
+        assert!(commands.iter().any(|command| command == "copy-mode -t %1"));
+        assert!(
+            commands
+                .iter()
+                .any(|command| command == "send-keys -t %1 -X top-line")
+        );
+        assert!(
+            commands
+                .iter()
+                .any(|command| command == "send-keys -t %1 -N 2 -X cursor-down")
+        );
+        assert!(
+            commands
+                .iter()
+                .any(|command| command == "send-keys -t %1 -N 3 -X cursor-right")
+        );
+    }
+
+    #[test]
+    fn jump_mode_skips_zero_cursor_offsets() {
+        let config = Config {
+            use_system_clipboard: false,
+            ..Config::default()
+        };
+        let tmux = crate::tmux::Tmux::fake("3.3a");
+        let mut runner = runner();
+        runner.mode = "jump".into();
+        runner.offset = Some((0, 0));
+
+        runner.run(&config, &tmux).unwrap();
+
+        let commands = tmux.executed_commands();
+        assert!(commands.iter().any(|command| command == "copy-mode -t %1"));
+        assert!(!commands.iter().any(|command| command.contains("cursor-")));
+    }
+
+    #[test]
     fn paste_command_cancels_copy_mode_before_pasting() {
         let config = Config {
             main_action: ":paste:".into(),

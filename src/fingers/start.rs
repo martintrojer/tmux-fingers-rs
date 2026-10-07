@@ -519,8 +519,8 @@ mod tests {
     use crate::fingers::config::{Config, builtin_patterns};
 
     use super::{
-        CleanupState, State, Target, TrackedTmuxState, needs_resize, patterns_from_options,
-        process_input, report_action_error,
+        CleanupState, StartOptions, StartRunner, State, Target, TrackedTmuxState, needs_resize,
+        patterns_from_options, process_input, report_action_error,
     };
 
     struct NullPrinter;
@@ -541,6 +541,20 @@ mod tests {
         let tmux = crate::tmux::Tmux::fake("3.3a");
         let patterns = patterns_from_options(&config, Some("ip,diff"), &tmux).unwrap();
         assert_eq!(patterns.len(), 2);
+    }
+
+    #[test]
+    fn rejects_unknown_requested_pattern() {
+        let config = Config::default();
+        let tmux = crate::tmux::Tmux::fake("3.3a");
+
+        let error = patterns_from_options(&config, Some("missing"), &tmux).unwrap_err();
+
+        assert_eq!(error, "Unknown pattern missing");
+        assert!(tmux.executed_commands().iter().any(|command| {
+            command.contains("display-message -d 5000")
+                && command.contains("Unknown pattern missing")
+        }));
     }
 
     #[test]
@@ -570,6 +584,28 @@ mod tests {
         assert!(!should_continue);
         assert_eq!(state.result, "match");
         assert_eq!(state.modifier, "main");
+    }
+
+    #[test]
+    fn jump_mode_ignores_multi_mode_toggle() {
+        let mut state = State::default();
+        let mut targets = BTreeMap::new();
+        let mut printer = NullPrinter;
+        let render = |_printer: &mut NullPrinter, _state: &State| Ok(BTreeMap::new());
+
+        let should_continue = process_input(
+            &mut state,
+            &mut targets,
+            "toggle-multi-mode",
+            &render,
+            &mut printer,
+            "jump",
+        )
+        .unwrap();
+
+        assert!(should_continue);
+        assert!(!state.multi_mode);
+        assert!(!state.exiting);
     }
 
     #[test]
@@ -657,6 +693,77 @@ mod tests {
 
         let executed = tmux.executed_commands();
         assert!(executed.iter().any(|cmd| cmd.contains(&long)));
+    }
+
+    #[test]
+    fn selected_match_shows_copied_notification() {
+        let tmux = crate::tmux::Tmux::fake("3.3a");
+        let runner = StartRunner {
+            tmux: tmux.clone(),
+            config: Config {
+                use_system_clipboard: false,
+                show_copied_notification: "1".into(),
+                ..Config::default()
+            },
+            options: StartOptions {
+                pane_id: "%1".into(),
+                mode: "default".into(),
+                patterns: None,
+                main_action: None,
+                ctrl_action: None,
+                alt_action: None,
+                shift_action: None,
+            },
+            target_pane: crate::tmux::Pane {
+                pane_id: "%1".into(),
+                window_id: "@1".into(),
+                pane_width: 80,
+                pane_height: 24,
+                pane_current_path: "/tmp".into(),
+                pane_in_mode: false,
+                scroll_position: None,
+                window_zoomed_flag: false,
+            },
+            active_pane: crate::tmux::Pane {
+                pane_id: "%1".into(),
+                window_id: "@1".into(),
+                pane_width: 80,
+                pane_height: 24,
+                pane_current_path: "/tmp".into(),
+                pane_in_mode: false,
+                scroll_position: None,
+                window_zoomed_flag: false,
+            },
+            patterns: Vec::new(),
+        };
+        let state = State {
+            input: "a".into(),
+            result: "match".into(),
+            modifier: "main".into(),
+            ..State::default()
+        };
+        let targets = BTreeMap::from([(
+            "a".into(),
+            Target {
+                text: "match".into(),
+                hint: "a".into(),
+                offset: (0, 0),
+            },
+        )]);
+
+        runner.try_process_result(&state, &targets).unwrap();
+
+        let commands = tmux.executed_commands();
+        assert!(
+            commands
+                .iter()
+                .any(|command| command == "buffer:false:match")
+        );
+        assert!(
+            commands
+                .iter()
+                .any(|command| command == "display-message -d 1000 'Copied: match'")
+        );
     }
 
     #[test]
