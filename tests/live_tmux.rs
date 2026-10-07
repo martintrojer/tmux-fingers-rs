@@ -771,6 +771,15 @@ fn custom_shell_action_receives_match_on_stdin() {
 
 #[test]
 fn render_error_preserves_original_pane_and_tmux_state() {
+    assert_render_error_preserves_original_pane_and_tmux_state(false);
+}
+
+#[test]
+fn render_error_preserves_zoomed_pane_and_tmux_state() {
+    assert_render_error_preserves_original_pane_and_tmux_state(true);
+}
+
+fn assert_render_error_preserves_original_pane_and_tmux_state(zoomed: bool) {
     let socket = unique_name("tmux-fingers-rs");
     let session = unique_name("session");
     let state_home = short_state_home();
@@ -805,6 +814,24 @@ fn render_error_preserves_original_pane_and_tmux_state() {
             "#{pane_id}",
         ],
     );
+    if zoomed {
+        tmux(&socket, &["split-window", "-d", "-t", &pane_id, "exec cat"]);
+        tmux(&socket, &["resize-pane", "-Z", "-t", &pane_id]);
+        assert_eq!(
+            tmux(
+                &socket,
+                &[
+                    "display-message",
+                    "-p",
+                    "-t",
+                    &pane_id,
+                    "#{window_zoomed_flag}"
+                ],
+            ),
+            "1"
+        );
+    }
+
     let original_layout = tmux(
         &socket,
         &[
