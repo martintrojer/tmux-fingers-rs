@@ -280,12 +280,12 @@ mod tests {
     }
 
     #[test]
-    fn default_config_does_not_panic() {
+    fn default_config_generates_hints_for_multiple_matches() {
         let config = Config::default();
         let mut output = TextOutput::default();
         let mut hinter = Hinter::new(
             test_options(
-                vec!["12345".into()],
+                vec!["12345 67890".into()],
                 vec![r"\d+".into()],
                 config.alphabet,
                 false,
@@ -294,6 +294,8 @@ mod tests {
         );
 
         hinter.run().unwrap();
+        assert_eq!(hinter.targets().len(), 2);
+        assert!(output.contents.contains("<hint>"), "{}", output.contents);
     }
 
     #[test]

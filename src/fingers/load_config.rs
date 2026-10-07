@@ -481,6 +481,21 @@ mod tests {
     }
 
     #[test]
+    fn names_the_user_pattern_that_breaks_the_combined_matcher() {
+        let pattern = "(*CRLF)bar";
+        let err = parse(&[
+            ("enabled_builtin_patterns", ""),
+            ("pattern_0", "foo"),
+            ("pattern_1", pattern),
+        ])
+        .unwrap_err();
+
+        assert!(err.contains("@fingers-pattern-1"), "{err}");
+        assert!(!err.contains("@fingers-pattern-0"), "{err}");
+        assert!(err.contains(pattern), "{err}");
+    }
+
+    #[test]
     fn rejects_an_invalid_pattern_even_if_another_pattern_balances_it() {
         let err = parse(&[
             ("enabled_builtin_patterns", ""),
