@@ -770,6 +770,103 @@ fn custom_shell_action_receives_match_on_stdin() {
 }
 
 #[test]
+fn render_error_preserves_original_pane_and_tmux_state() {
+    let socket = unique_name("tmux-fingers-rs");
+    let session = unique_name("session");
+    let state_home = short_state_home();
+    fs::create_dir_all(&state_home).unwrap();
+
+    setup_server(&socket, &session, "printf '12345\n'; exec cat");
+    let client = attach_control_client(&socket, &session);
+    thread::sleep(Duration::from_millis(200));
+
+    tmux(&socket, &["set-option", "-g", "prefix", "C-a"]);
+    tmux(&socket, &["set-option", "-g", "prefix2", "C-Space"]);
+
+    let bin = binary();
+    run_load_config(&bin, &state_home, &socket);
+
+    let config_path = state_home
+        .join("tmux-fingers-rs")
+        .join("tmux-0000")
+        .join("config.json");
+    let mut config: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config_path).unwrap()).unwrap();
+    config["patterns"] = serde_json::json!({"bad": "(unclosed"});
+    fs::write(&config_path, serde_json::to_vec(&config).unwrap()).unwrap();
+
+    let pane_id = tmux(
+        &socket,
+        &[
+            "display-message",
+            "-p",
+            "-t",
+            &format!("{session}:0.0"),
+            "#{pane_id}",
+        ],
+    );
+    let original_layout = tmux(
+        &socket,
+        &[
+            "list-panes",
+            "-a",
+            "-F",
+            "#{window_id};#{window_layout};#{pane_id}",
+        ],
+    );
+    let original_client_state = tmux(
+        &socket,
+        &[
+            "display-message",
+            "-p",
+            "#{client_key_table};#{prefix};#{prefix2}",
+        ],
+    );
+
+    let start = fingers(&bin, &state_home, &socket)
+        .args(["start", &pane_id])
+        .output()
+        .expect("run start");
+    let stderr = String::from_utf8_lossy(&start.stderr).into_owned();
+    let final_layout = tmux(
+        &socket,
+        &[
+            "list-panes",
+            "-a",
+            "-F",
+            "#{window_id};#{window_layout};#{pane_id}",
+        ],
+    );
+    let windows = tmux(&socket, &["list-windows", "-F", "#{window_name}"]);
+    let final_client_state = tmux(
+        &socket,
+        &[
+            "display-message",
+            "-p",
+            "#{client_key_table};#{prefix};#{prefix2}",
+        ],
+    );
+    let saved_config: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config_path).unwrap()).unwrap();
+
+    cleanup(&socket, client, &state_home);
+
+    assert!(!start.status.success(), "start unexpectedly succeeded");
+    assert!(
+        stderr.contains("missing closing parenthesis"),
+        "expected pattern compilation error, got: {stderr}"
+    );
+    assert_eq!(final_layout, original_layout);
+    assert!(!windows.lines().any(|name| name == "[fingers]"));
+    assert_eq!(final_client_state, original_client_state);
+    assert_eq!(final_client_state, "root;C-a;C-Space");
+    assert_eq!(
+        saved_config["patterns"],
+        serde_json::json!({"bad": "(unclosed"})
+    );
+}
+
+#[test]
 fn failed_action_is_reported_and_still_restores_tmux_state() {
     let socket = unique_name("tmux-fingers-rs");
     let session = unique_name("session");

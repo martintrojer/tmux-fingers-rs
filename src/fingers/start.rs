@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs::File;
-use std::io::Write;
+use std::io::{BufWriter, Write};
 
 use crate::fingers::action_runner::{ActionRunner, PaneInfo};
 use crate::fingers::config::Config;
@@ -62,14 +62,18 @@ impl StartRunner {
             .map(ToOwned::to_owned)
             .collect::<Vec<_>>();
         let fingers_window = self.tmux.create_window("[fingers]", "cat", 80, 24)?;
-        let cleanup = CleanupState {
+        let mut cleanup = CleanupState {
             tmux: self.tmux.clone(),
             track,
             target_pane_id: self.target_pane.pane_id.clone(),
             active_pane_id: self.active_pane.pane_id.clone(),
             fingers_pane_id: fingers_window.pane_id.clone(),
+            swapped: false,
         };
-        let mut printer = PanePrinter::new(&fingers_window.pane_tty)?;
+        let mut printer = match PanePrinter::new(&fingers_window.pane_tty) {
+            Ok(printer) => printer,
+            Err(err) => return merge_cleanup_result(Err(err), cleanup.run()),
+        };
         let state = State::default();
 
         let render = |printer: &mut PanePrinter, state: &State| {
@@ -97,6 +101,7 @@ impl StartRunner {
                 &mut printer,
                 &state,
                 &render_context,
+                &mut cleanup.swapped,
             )?;
 
             if self.config.benchmark_mode == "1" {
@@ -288,6 +293,7 @@ fn show_hints(
     printer: &mut PanePrinter,
     state: &State,
     context: &RenderContext<'_>,
+    swapped: &mut bool,
 ) -> Result<BTreeMap<String, Target>, String> {
     if needs_resize(context.target_pane, context.pane_contents) {
         tmux.resize_window(
@@ -299,10 +305,14 @@ fn show_hints(
 
     let targets = if context.target_pane.window_zoomed_flag {
         tmux.swap_panes(&fingers_window.pane_id, &context.target_pane.pane_id)?;
+        *swapped = true;
         render_view(printer, context, state)?
     } else {
+        // Unlike upstream's silent render failure, return the error while leaving
+        // teardown balanced by recording only a swap that actually happened.
         let targets = render_view(printer, context, state)?;
         tmux.swap_panes(&fingers_window.pane_id, &context.target_pane.pane_id)?;
+        *swapped = true;
         targets
     };
 
@@ -410,7 +420,7 @@ fn needs_resize(target_pane: &Pane, pane_contents: &[String]) -> bool {
 }
 
 struct PanePrinter {
-    file: File,
+    file: BufWriter<File>,
 }
 
 impl PanePrinter {
@@ -419,7 +429,9 @@ impl PanePrinter {
             .write(true)
             .open(path)
             .map_err(|err| err.to_string())?;
-        Ok(Self { file })
+        Ok(Self {
+            file: BufWriter::new(file),
+        })
     }
 }
 
@@ -446,17 +458,20 @@ struct CleanupState {
     target_pane_id: String,
     active_pane_id: String,
     fingers_pane_id: String,
+    swapped: bool,
 }
 
 impl CleanupState {
     fn run(self) -> Result<(), String> {
         let mut errors = Vec::new();
 
-        if let Err(err) = self
-            .tmux
-            .swap_panes(&self.fingers_pane_id, &self.target_pane_id)
-        {
-            errors.push(err);
+        if self.swapped {
+            if let Err(err) = self
+                .tmux
+                .swap_panes(&self.fingers_pane_id, &self.target_pane_id)
+            {
+                errors.push(err);
+            }
         }
         if let Err(err) = self.tmux.kill_pane(&self.fingers_pane_id) {
             errors.push(err);
@@ -658,6 +673,7 @@ mod tests {
             target_pane_id: "%1".into(),
             active_pane_id: "%2".into(),
             fingers_pane_id: "%3".into(),
+            swapped: true,
         };
 
         cleanup.run().unwrap();
