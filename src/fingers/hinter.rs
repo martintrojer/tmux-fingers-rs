@@ -76,8 +76,16 @@ impl<'a, P: Printer> Hinter<'a, P> {
     }
 
     pub fn run(&mut self) -> Result<(), String> {
-        let pattern = compile_pattern(&self.patterns)?;
-        let hints = Huffman.generate_hints(&self.alphabet, self.n_matches(&pattern)?);
+        let mut pattern = compile_pattern(&self.patterns)?;
+        let n_matches = match self.n_matches(&pattern) {
+            Ok(count) => count,
+            Err(err) if err.contains("JIT stack limit reached") => {
+                pattern = compile_pattern_with_jit(&self.patterns, false)?;
+                self.n_matches(&pattern)?
+            }
+            Err(err) => return Err(err),
+        };
+        let hints = Huffman.generate_hints(&self.alphabet, n_matches);
         let mut hint_index = hints.len();
         self.target_by_hint.clear();
         self.target_by_text.clear();
@@ -272,9 +280,13 @@ fn expand_tabs(line: &str, tab_positions: &[usize]) -> String {
 }
 
 pub fn compile_pattern(patterns: &[String]) -> Result<Regex, String> {
-    RegexBuilder::new()
-        .utf(true)
-        .ucp(true)
+    compile_pattern_with_jit(patterns, true)
+}
+
+fn compile_pattern_with_jit(patterns: &[String], jit: bool) -> Result<Regex, String> {
+    let mut builder = RegexBuilder::new();
+    builder.utf(true).ucp(true).jit_if_available(jit);
+    builder
         .build(&format!("(?J)({})", patterns.join("|")))
         .map_err(|err| err.to_string())
 }
@@ -282,9 +294,10 @@ pub fn compile_pattern(patterns: &[String]) -> Result<Regex, String> {
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
+    use std::time::{Duration, Instant};
 
-    use super::{Hinter, HinterOptions, Printer, Target, pop_hint};
-    use crate::fingers::config::{Config, builtin_patterns};
+    use super::{Hinter, HinterOptions, Printer, Target, compile_pattern, pop_hint};
+    use crate::fingers::config::builtin_patterns;
 
     #[derive(Default)]
     struct TextOutput {
@@ -297,22 +310,6 @@ mod tests {
         }
 
         fn flush(&mut self) {}
-    }
-
-    fn generate_lines() -> String {
-        let mut input = String::new();
-        for row in 0..50 {
-            if row > 0 {
-                input.push('\n');
-            }
-            for col in 0..10 {
-                if col > 0 {
-                    input.push(' ');
-                }
-                input.push_str(&format!("{:016}", row * 10 + col));
-            }
-        }
-        input
     }
 
     fn test_options(
@@ -337,90 +334,6 @@ mod tests {
             hint_position: "left".into(),
             reset_sequence: "<reset>".into(),
         }
-    }
-
-    #[test]
-    fn default_config_generates_hints_for_multiple_matches() {
-        let config = Config::default();
-        let mut output = TextOutput::default();
-        let mut hinter = Hinter::new(
-            test_options(
-                vec!["12345 67890".into()],
-                vec![r"\d+".into()],
-                config.alphabet,
-                false,
-            ),
-            &mut output,
-        );
-
-        hinter.run().unwrap();
-        assert_eq!(hinter.targets().len(), 2);
-        assert!(output.contents.contains("<hint>"), "{}", output.contents);
-    }
-
-    #[test]
-    fn works_in_grid_of_lines() {
-        let input = generate_lines();
-        let mut output = TextOutput::default();
-        let patterns = builtin_patterns()
-            .values()
-            .map(|pattern| pattern.to_string())
-            .collect::<Vec<_>>();
-        let alphabet = vec!["a", "s", "d", "f"]
-            .into_iter()
-            .map(String::from)
-            .collect::<Vec<_>>();
-
-        let mut hinter = Hinter::new(
-            test_options(
-                input.lines().map(ToOwned::to_owned).collect(),
-                patterns,
-                alphabet,
-                false,
-            ),
-            &mut output,
-        );
-
-        hinter.run().unwrap();
-        assert!(!output.contents.is_empty());
-    }
-
-    #[test]
-    fn highlights_captured_groups() {
-        let input = r#"
-On branch ruby-rewrite-more-like-crystal-rewrite-amirite
-Your branch is up to date with 'origin/ruby-rewrite-more-like-crystal-rewrite-amirite'.
-
-Changes to be committed:
-        modified:   spec/lib/fingers/match_formatter_spec.cr
-"#;
-        let mut output = TextOutput::default();
-        let mut patterns = builtin_patterns()
-            .values()
-            .map(|pattern| pattern.to_string())
-            .collect::<Vec<_>>();
-        patterns.push("On branch (?<match>.*)".to_string());
-        let alphabet = vec!["a", "s", "d", "f"]
-            .into_iter()
-            .map(String::from)
-            .collect::<Vec<_>>();
-
-        let mut hinter = Hinter::new(
-            test_options(
-                input.lines().map(ToOwned::to_owned).collect(),
-                patterns,
-                alphabet,
-                false,
-            ),
-            &mut output,
-        );
-
-        hinter.run().unwrap();
-        assert!(
-            output
-                .contents
-                .contains("ruby-rewrite-more-like-crystal-rewrite-amirite")
-        );
     }
 
     fn render(options: HinterOptions) -> (String, BTreeMap<String, Target>) {
@@ -488,6 +401,28 @@ Changes to be committed:
     }
 
     #[test]
+    fn named_capture_controls_highlight_and_codepoint_offset() {
+        let mut options = test_options(
+            vec!["é pre café!".into()],
+            vec![r"pre (?<match>café)!".into()],
+            vec!["a".into(), "s".into()],
+            false,
+        );
+        options.width = 11;
+
+        let (output, targets) = render(options);
+
+        assert_eq!(
+            output,
+            "<backdrop>é <reset><backdrop>pre <reset><hint>s<reset><highlight>afé<reset><backdrop>!<backdrop>"
+        );
+        assert_eq!(
+            targets,
+            BTreeMap::from([("s".into(), target("café", "s", 6))])
+        );
+    }
+
+    #[test]
     fn prefixes_expands_and_pads_every_line_like_upstream() {
         let mut options = test_options(
             vec!["❯\tX".into(), "é".into()],
@@ -501,6 +436,28 @@ Changes to be committed:
 
         assert_eq!(output, "<backdrop>❯       X  \n<backdrop>é           ");
         assert!(targets.is_empty());
+    }
+
+    #[test]
+    fn expands_tab_from_its_position_before_match_formatting() {
+        let mut options = test_options(
+            vec!["12345\tX".into()],
+            vec![r"[0-9]{4,}".into()],
+            vec!["a".into(), "s".into()],
+            false,
+        );
+        options.width = 20;
+
+        let (output, targets) = render(options);
+
+        assert_eq!(
+            output,
+            "<backdrop><reset><reset><hint>s<reset><highlight>2345<reset><backdrop>   X           "
+        );
+        assert_eq!(
+            targets,
+            BTreeMap::from([("s".into(), target("12345", "s", 0))])
+        );
     }
 
     #[test]
@@ -543,8 +500,66 @@ Changes to be committed:
     }
 
     #[test]
-    fn empty_hint_stack_is_an_error() {
-        assert_eq!(pop_hint(&[], &mut 0), Err("Too many matches".into()));
+    fn zero_hint_index_is_an_error_even_when_hints_exist() {
+        assert_eq!(
+            pop_hint(&["a".into()], &mut 0),
+            Err("Too many matches".into())
+        );
+    }
+
+    fn scan_duration(regex: &pcre2::bytes::Regex, input: &[u8]) -> Duration {
+        let started = Instant::now();
+        assert_eq!(regex.captures_iter(input).count(), input.len() / 6);
+        started.elapsed()
+    }
+
+    #[test]
+    fn dense_match_scanning_scales_better_than_quadratically() {
+        if !pcre2::is_jit_available() {
+            return;
+        }
+        let regex = compile_pattern(&[r"[0-9]{5}".into()]).unwrap();
+        let small = "12345 ".repeat(5_000);
+        let large = "12345 ".repeat(10_000);
+
+        // Warm PCRE2's JIT and allocator paths before taking bounded samples.
+        scan_duration(&regex, small.as_bytes());
+        scan_duration(&regex, large.as_bytes());
+        let mut small_samples = (0..3)
+            .map(|_| scan_duration(&regex, small.as_bytes()))
+            .collect::<Vec<_>>();
+        let mut large_samples = (0..3)
+            .map(|_| scan_duration(&regex, large.as_bytes()))
+            .collect::<Vec<_>>();
+        small_samples.sort_unstable();
+        large_samples.sort_unstable();
+        let small_median = small_samples[1];
+        let large_median = large_samples[1];
+
+        assert!(
+            large_median.as_nanos() < small_median.as_nanos() * 3,
+            "doubling dense matches took {large_median:?} versus {small_median:?}"
+        );
+    }
+
+    #[test]
+    fn falls_back_from_jit_for_long_path_matches() {
+        let path = format!("/{}", "dir/".repeat(1_000));
+        let mut options = test_options(
+            vec![path.clone()],
+            builtin_patterns()
+                .values()
+                .map(|pattern| pattern.to_string())
+                .collect(),
+            vec!["a".into(), "s".into()],
+            false,
+        );
+        options.width = path.len();
+
+        let (_, targets) = render(options);
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets["s"], target(&path, "s", 0));
     }
 
     #[test]

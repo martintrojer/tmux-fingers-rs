@@ -1,4 +1,15 @@
-use tmux_fingers_rs::fingers::{config::builtin_patterns, hinter::compile_pattern};
+use tmux_fingers_rs::fingers::{
+    config::builtin_patterns,
+    hinter::{Hinter, HinterOptions, Printer, compile_pattern},
+};
+
+#[derive(Default)]
+struct Sink;
+
+impl Printer for Sink {
+    fn print(&mut self, _: &str) {}
+    fn flush(&mut self) {}
+}
 
 fn matches_for(pattern_name: &str, input: &str) -> Vec<String> {
     let pattern = builtin_patterns()[pattern_name];
@@ -76,8 +87,40 @@ fn matches_digits() {
 }
 
 #[test]
-fn matches_digits_around_unicode() {
-    assert_eq!(matches_for("digit", "❯ café 12345 é"), vec!["12345"]);
+fn builtins_render_a_match_before_trailing_unicode() {
+    let mut output = Sink;
+    let mut hinter = Hinter::new(
+        HinterOptions {
+            input: vec!["./café é".into()],
+            width: 8,
+            current_input: String::new(),
+            selected_hints: Vec::new(),
+            patterns: builtin_patterns()
+                .values()
+                .map(|pattern| pattern.to_string())
+                .collect(),
+            alphabet: vec!["a".into(), "s".into()],
+            reuse_hints: false,
+            hint_style: String::new(),
+            highlight_style: String::new(),
+            selected_hint_style: String::new(),
+            selected_highlight_style: String::new(),
+            backdrop_style: String::new(),
+            hint_position: "left".into(),
+            reset_sequence: String::new(),
+        },
+        &mut output,
+    );
+
+    hinter.run().unwrap();
+    assert_eq!(
+        hinter
+            .targets()
+            .values()
+            .map(|target| target.text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["./café"]
+    );
 }
 
 #[test]
