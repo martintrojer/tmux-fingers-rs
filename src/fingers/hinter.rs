@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use pcre2::bytes::{Regex, RegexBuilder};
+use pcre2::bytes::{Captures, Match, Regex, RegexBuilder};
 
 use crate::fingers::match_formatter::MatchFormatter;
 use crate::huffman::Huffman;
@@ -132,10 +132,8 @@ impl<'a, P: Printer> Hinter<'a, P> {
             let full_text =
                 std::str::from_utf8(&bytes[full_start..full_end]).map_err(|err| err.to_string())?;
 
-            let capture = captures
-                .name("match")
-                .or_else(|| captures.get(0))
-                .ok_or_else(|| "missing capture".to_string())?;
+            let capture =
+                matched_capture(pattern, &captures).ok_or_else(|| "missing capture".to_string())?;
             let capture_start = capture.start();
             let capture_end = capture.end();
             let captured_text = std::str::from_utf8(&bytes[capture_start..capture_end])
@@ -220,9 +218,7 @@ impl<'a, P: Printer> Hinter<'a, P> {
             for line in &self.lines {
                 for captures in pattern.captures_iter(line.as_bytes()) {
                     let captures = captures.map_err(|err| err.to_string())?;
-                    let capture = captures
-                        .name("match")
-                        .or_else(|| captures.get(0))
+                    let capture = matched_capture(pattern, &captures)
                         .ok_or_else(|| "missing capture".to_string())?;
                     set.insert(line[capture.start()..capture.end()].to_string());
                 }
@@ -239,6 +235,16 @@ impl<'a, P: Printer> Hinter<'a, P> {
             Ok(count)
         }
     }
+}
+
+fn matched_capture<'s>(pattern: &Regex, captures: &Captures<'s>) -> Option<Match<'s>> {
+    pattern
+        .capture_names()
+        .iter()
+        .enumerate()
+        .filter(|(_, name)| name.as_deref() == Some("match"))
+        .find_map(|(index, _)| captures.get(index))
+        .or_else(|| captures.get(0))
 }
 
 fn pop_hint(hints: &[String], hint_index: &mut usize) -> Result<String, String> {
@@ -346,6 +352,25 @@ mod tests {
         (output.contents, targets)
     }
 
+    fn render_with_all_builtin_patterns(
+        input: &str,
+        first_pattern: &str,
+        reuse_hints: bool,
+    ) -> BTreeMap<String, Target> {
+        let mut patterns = builtin_patterns();
+        let first_pattern = patterns.remove(first_pattern).unwrap().to_string();
+        let mut options = test_options(
+            vec![input.into()],
+            std::iter::once(first_pattern)
+                .chain(patterns.values().map(|pattern| pattern.to_string()))
+                .collect(),
+            vec!["a".into(), "s".into()],
+            reuse_hints,
+        );
+        options.width = input.chars().count();
+        render(options).1
+    }
+
     fn target(text: &str, hint: &str, column: usize) -> Target {
         target_at(text, hint, 0, column)
     }
@@ -419,6 +444,34 @@ mod tests {
         assert_eq!(
             targets,
             BTreeMap::from([("s".into(), target("café", "s", 6))])
+        );
+    }
+
+    #[test]
+    fn combined_builtins_capture_git_status_path() {
+        assert_eq!(
+            render_with_all_builtin_patterns("        modified:   src/x.rs", "git-status", false),
+            BTreeMap::from([("s".into(), target("src/x.rs", "s", 20))])
+        );
+    }
+
+    #[test]
+    fn combined_builtins_capture_diff_path() {
+        assert_eq!(
+            render_with_all_builtin_patterns("--- a/src/y.rs", "diff", true),
+            BTreeMap::from([("s".into(), target("src/y.rs", "s", 6))])
+        );
+    }
+
+    #[test]
+    fn combined_builtins_capture_git_branch() {
+        assert_eq!(
+            render_with_all_builtin_patterns(
+                "Your branch is up to date with 'origin/main'.",
+                "git-status-branch",
+                false,
+            ),
+            BTreeMap::from([("s".into(), target("origin/main", "s", 32))])
         );
     }
 
