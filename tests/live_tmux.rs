@@ -2,15 +2,22 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
+
+/// Per-process sequence for unique names. Not the clock: macOS `SystemTime`
+/// has only microsecond resolution, so clock-derived names collided when
+/// tests started together under the parallel harness (duplicate tmux
+/// sessions, or two tests sharing one fingers socket so a `start` waited
+/// forever for input).
+fn next_id() -> u32 {
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
 
 fn unique_name(prefix: &str) -> String {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    format!("{prefix}-{}-{nanos}", std::process::id())
+    format!("{prefix}-{}-{}", std::process::id(), next_id())
 }
 
 /// Returns a short, unique base directory for per-test state.
@@ -21,14 +28,9 @@ fn unique_name(prefix: &str) -> String {
 /// 104-byte `SUN_LEN` limit, causing tmux to fail with
 /// `path must be shorter than SUN_LEN`.
 fn short_state_home() -> PathBuf {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
     // Keep the prefix tiny so the full socket path stays well under 104 bytes.
-    // e.g. /tmp/tf-<pid>-<nanos-suffix>
-    let suffix = (nanos % 1_000_000) as u32;
-    PathBuf::from("/tmp").join(format!("tf-{}-{suffix:06}", std::process::id()))
+    // e.g. /tmp/tf-<pid>-<n>
+    PathBuf::from("/tmp").join(format!("tf-{}-{}", std::process::id(), next_id()))
 }
 
 fn tmux(socket: &str, args: &[&str]) -> String {
@@ -87,20 +89,59 @@ fn attach_control_client(socket: &str, session: &str) -> Child {
         .expect("attach control client")
 }
 
-fn spawn_binary(bin: &Path, state_home: &Path, socket: &str, args: &[&str]) -> Child {
-    Command::new(bin)
-        .args(args)
+/// A `Command` for the binary under test, pointed at the test's tmux socket
+/// and state dir.
+///
+/// `TMUX` / `TMUX_PANE` are cleared: the binary derives its state dir from
+/// the server pid in `$TMUX` (`tmux-<pid>`), so when the suite runs inside a
+/// tmux session it would otherwise listen on the outer server's socket path
+/// instead of the `tmux-0000` one these tests wait for.
+fn fingers(bin: &Path, state_home: &Path, socket: &str) -> Command {
+    let mut cmd = Command::new(bin);
+    cmd.env_remove("TMUX")
+        .env_remove("TMUX_PANE")
         .env("XDG_STATE_HOME", state_home)
-        .env("FINGERS_TMUX_SOCKET", format!("-L {socket}"))
-        .spawn()
-        .expect("spawn binary")
+        .env("FINGERS_TMUX_SOCKET", format!("-L {socket}"));
+    cmd
+}
+
+/// Kills the wrapped `start` process on drop. Without this a failing test
+/// orphans `start`, which keeps the test's stdout/stderr open and makes a
+/// piped `cargo test` hang instead of reporting the failure.
+struct KillOnDrop(Child);
+
+impl std::ops::Deref for KillOnDrop {
+    type Target = Child;
+    fn deref(&self) -> &Child {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for KillOnDrop {
+    fn deref_mut(&mut self) -> &mut Child {
+        &mut self.0
+    }
+}
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+fn spawn_binary(bin: &Path, state_home: &Path, socket: &str, args: &[&str]) -> KillOnDrop {
+    KillOnDrop(
+        fingers(bin, state_home, socket)
+            .args(args)
+            .spawn()
+            .expect("spawn binary"),
+    )
 }
 
 fn run_load_config(bin: &Path, state_home: &Path, socket: &str) {
-    let load = Command::new(bin)
+    let load = fingers(bin, state_home, socket)
         .arg("load-config")
-        .env("XDG_STATE_HOME", state_home)
-        .env("FINGERS_TMUX_SOCKET", format!("-L {socket}"))
         .output()
         .expect("run load-config");
     assert!(
@@ -189,10 +230,8 @@ fn load_config_and_start_work_against_live_tmux() {
     let socket_path = socket_path(&state_home);
     wait_for_socket(&socket_path);
 
-    let send = Command::new(&bin)
+    let send = fingers(&bin, &state_home, &socket)
         .args(["send-input", "hint:b:main"])
-        .env("XDG_STATE_HOME", &state_home)
-        .env("FINGERS_TMUX_SOCKET", format!("-L {socket}"))
         .output()
         .expect("run send-input");
     assert!(
@@ -263,10 +302,8 @@ fn multimode_selects_multiple_matches() {
         "hint:y:main",
         "toggle-multi-mode",
     ] {
-        let send = Command::new(&bin)
+        let send = fingers(&bin, &state_home, &socket)
             .args(["send-input", input])
-            .env("XDG_STATE_HOME", &state_home)
-            .env("FINGERS_TMUX_SOCKET", format!("-L {socket}"))
             .output()
             .expect("run send-input");
         assert!(
@@ -333,10 +370,8 @@ fn jump_mode_enters_copy_mode_on_selection() {
     let socket_path = socket_path(&state_home);
     wait_for_socket(&socket_path);
 
-    let send = Command::new(&bin)
+    let send = fingers(&bin, &state_home, &socket)
         .args(["send-input", "hint:b:main"])
-        .env("XDG_STATE_HOME", &state_home)
-        .env("FINGERS_TMUX_SOCKET", format!("-L {socket}"))
         .output()
         .expect("run send-input");
     assert!(
@@ -415,10 +450,8 @@ fn custom_pattern_is_loaded_and_selected() {
     let socket_path = socket_path(&state_home);
     wait_for_socket(&socket_path);
 
-    let send = Command::new(&bin)
+    let send = fingers(&bin, &state_home, &socket)
         .args(["send-input", "hint:b:main"])
-        .env("XDG_STATE_HOME", &state_home)
-        .env("FINGERS_TMUX_SOCKET", format!("-L {socket}"))
         .output()
         .expect("run send-input");
     assert!(
@@ -484,10 +517,8 @@ fn paste_action_pastes_match_into_pane() {
     let socket_path = socket_path(&state_home);
     wait_for_socket(&socket_path);
 
-    let send = Command::new(&bin)
+    let send = fingers(&bin, &state_home, &socket)
         .args(["send-input", "hint:b:main"])
-        .env("XDG_STATE_HOME", &state_home)
-        .env("FINGERS_TMUX_SOCKET", format!("-L {socket}"))
         .output()
         .expect("run send-input");
     assert!(
@@ -563,10 +594,8 @@ fn custom_shell_action_receives_match_on_stdin() {
     let socket_path = socket_path(&state_home);
     wait_for_socket(&socket_path);
 
-    let send = Command::new(&bin)
+    let send = fingers(&bin, &state_home, &socket)
         .args(["send-input", "hint:b:main"])
-        .env("XDG_STATE_HOME", &state_home)
-        .env("FINGERS_TMUX_SOCKET", format!("-L {socket}"))
         .output()
         .expect("run send-input");
     assert!(
@@ -635,27 +664,25 @@ fn failed_action_is_reported_and_still_restores_tmux_state() {
     // Since upstream 2.7.1 (`add error handling and reporting when running
     // actions`), a failing action is reported rather than aborting the run, so
     // `start` exits 0 and teardown still restores tmux state.
-    let mut start = Command::new(&bin)
-        .args([
-            "start",
-            "--main-action",
-            "/definitely/missing/tmux-fingers-bin",
-            &pane_id,
-        ])
-        .env("XDG_STATE_HOME", &state_home)
-        .env("FINGERS_TMUX_SOCKET", format!("-L {socket}"))
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn binary");
+    let mut start = KillOnDrop(
+        fingers(&bin, &state_home, &socket)
+            .args([
+                "start",
+                "--main-action",
+                "/definitely/missing/tmux-fingers-bin",
+                &pane_id,
+            ])
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn binary"),
+    );
     let mut start_stderr = start.stderr.take().expect("piped stderr");
 
     let socket_path = socket_path(&state_home);
     wait_for_socket(&socket_path);
 
-    let send = Command::new(&bin)
+    let send = fingers(&bin, &state_home, &socket)
         .args(["send-input", "hint:b:main"])
-        .env("XDG_STATE_HOME", &state_home)
-        .env("FINGERS_TMUX_SOCKET", format!("-L {socket}"))
         .output()
         .expect("run send-input");
     assert!(
