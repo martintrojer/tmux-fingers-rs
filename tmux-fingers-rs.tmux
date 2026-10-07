@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # tmux-fingers-rs — tmux plugin entrypoint for the Rust port of tmux-fingers.
 #
-# Resolution order for the binary:
-#   1. `tmux-fingers-rs` on $PATH
-#   2. <plugin dir>/bin/tmux-fingers-rs           (placed by install-wizard.sh)
+# Resolution order puts the wizard-managed binary first, followed by $PATH,
+# then local build outputs. Cargo install actions remove the wizard-managed
+# binary so their new PATH installation takes effect.
+#   1. <plugin dir>/bin/tmux-fingers-rs           (placed by install-wizard.sh)
+#   2. `tmux-fingers-rs` on $PATH
 #   3. <plugin dir>/target/release/tmux-fingers-rs
 #   4. <plugin dir>/target/debug/tmux-fingers-rs  (handy during development)
 #
@@ -20,11 +22,19 @@ set -u
 
 CURRENT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
+function shell_quote() {
+  printf "'%s'" "${1//\'/\'\\\'\'}"
+}
+
+function tmux_literal() {
+  printf '%s' "${1//#/##}"
+}
+
 FINGERS_BINARY=""
-if command -v tmux-fingers-rs &>/dev/null; then
-  FINGERS_BINARY="tmux-fingers-rs"
-elif [[ -x "$CURRENT_DIR/bin/tmux-fingers-rs" ]]; then
+if [[ -x "$CURRENT_DIR/bin/tmux-fingers-rs" ]]; then
   FINGERS_BINARY="$CURRENT_DIR/bin/tmux-fingers-rs"
+elif command -v tmux-fingers-rs &>/dev/null; then
+  FINGERS_BINARY="tmux-fingers-rs"
 elif [[ -x "$CURRENT_DIR/target/release/tmux-fingers-rs" ]]; then
   FINGERS_BINARY="$CURRENT_DIR/target/release/tmux-fingers-rs"
 elif [[ -x "$CURRENT_DIR/target/debug/tmux-fingers-rs" ]]; then
@@ -32,11 +42,11 @@ elif [[ -x "$CURRENT_DIR/target/debug/tmux-fingers-rs" ]]; then
 fi
 
 if [[ -z "$FINGERS_BINARY" ]]; then
-  tmux run-shell -b "bash $CURRENT_DIR/install-wizard.sh"
+  tmux run-shell -b "$(tmux_literal "$(shell_quote "$CURRENT_DIR/install-wizard.sh")")"
   exit 0
 fi
 
-CURRENT_FINGERS_VERSION="$($FINGERS_BINARY version 2>/dev/null || true)"
+CURRENT_FINGERS_VERSION="$("$FINGERS_BINARY" version 2>/dev/null || true)"
 
 # Read the version from Cargo.toml. Match the first line that looks like:
 #   version = "x.y.z"
@@ -55,7 +65,7 @@ if [[ "$SKIP_WIZARD" = "0" \
       && -n "$CURRENT_GIT_VERSION" \
       && -n "$CURRENT_FINGERS_VERSION" \
       && "$CURRENT_FINGERS_VERSION" != "$CURRENT_GIT_VERSION" ]]; then
-  tmux run-shell -b "FINGERS_UPDATE=1 bash $CURRENT_DIR/install-wizard.sh"
+  tmux run-shell -b "FINGERS_UPDATE=1 $(tmux_literal "$(shell_quote "$CURRENT_DIR/install-wizard.sh")")"
   if [[ "$?" != "0" ]]; then
     echo "Something went wrong while updating tmux-fingers-rs. Please try again."
     exit 1
@@ -70,5 +80,5 @@ else
   FINGERS_TERM="${TERM:-}"
 fi
 
-tmux run "TERM=$FINGERS_TERM $FINGERS_BINARY load-config"
+tmux run "TERM=$(tmux_literal "$(shell_quote "$FINGERS_TERM")") $(tmux_literal "$(shell_quote "$FINGERS_BINARY")") load-config"
 exit $?

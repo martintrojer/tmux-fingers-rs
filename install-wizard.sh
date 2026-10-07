@@ -14,28 +14,54 @@
 #   (none)                 show interactive tmux menu
 #
 # When invoked with no action it pops a `tmux display-menu` so the user
-# can pick. When invoked with an action it does the work and re-sources
-# ~/.tmux.conf on success.
+# can pick. When invoked with an action it does the work and reloads the
+# plugin entrypoint on success.
 
 set -u
 
 CURRENT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 action="${1:-}"
+tmpdir_to_clean=""
+install_tmp_to_clean=""
+
+function shell_quote() {
+  printf "'%s'" "${1//\'/\'\\\'\'}"
+}
+
+function tmux_literal() {
+  printf '%s' "${1//#/##}"
+}
+
+function tmux_quote() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//\$/\\\$}"
+  printf '"%s"' "${value//#/##}"
+}
 
 # ---------- exit handling ---------------------------------------------------
 
 function finish {
   exit_code=$?
+  trap - EXIT
+
+  [[ -z "$install_tmp_to_clean" ]] || rm -f "$install_tmp_to_clean" || exit_code=$?
+  [[ -z "$tmpdir_to_clean" ]] || rm -rf "$tmpdir_to_clean" || exit_code=$?
 
   # Only intercept the exit code when there is an action defined.
   # Without an action we are just popping a menu; let it close cleanly.
   if [[ -z "$action" ]]; then
-    exit $exit_code
+    exit "$exit_code"
   fi
 
   if [[ $exit_code -eq 0 ]]; then
-    echo "Reloading tmux.conf..."
-    tmux source ~/.tmux.conf 2>/dev/null || true
+    echo "Reloading tmux plugin..."
+    # Unlike upstream, rerun the entrypoint so XDG and other tmux configs work.
+    tmux run-shell "$(tmux_literal "$(shell_quote "$CURRENT_DIR/tmux-fingers-rs.tmux")")" || exit_code=$?
+  fi
+
+  if [[ $exit_code -eq 0 ]]; then
     echo
     echo "Done. Press any key to close this window."
     read -n 1 -r
@@ -62,9 +88,11 @@ function require_cargo() {
     echo "    https://rustup.rs"
     echo
     echo
-    echo "Or pick \"Download prebuilt binary\" from the wizard menu to skip"
-    echo "the Rust toolchain entirely."
-    echo
+    if [[ -n "$(detect_target)" ]]; then
+      echo "Or pick \"Download prebuilt binary\" from the wizard menu to skip"
+      echo "the Rust toolchain entirely."
+      echo
+    fi
     return 1
   fi
 }
@@ -136,34 +164,37 @@ function download_binary() {
   base="https://github.com/martintrojer/tmux-fingers-rs/releases/download/${tag}"
   archive="tmux-fingers-rs-${tag}-${target}.tar.gz"
   checksum="${archive}.sha256"
-  tmpdir="$(mktemp -d)"
+  tmpdir="$(mktemp -d)" || exit $?
+  tmpdir_to_clean="$tmpdir"
 
   echo "Target:   $target"
   echo "Version:  $version"
   echo "URL:      $base/$archive"
   echo
 
-  download_to "$base/$archive"  "$tmpdir/$archive"
-  download_to "$base/$checksum" "$tmpdir/$checksum"
+  download_to "$base/$archive"  "$tmpdir/$archive" || exit $?
+  download_to "$base/$checksum" "$tmpdir/$checksum" || exit $?
 
   echo "Verifying SHA256..."
-  pushd "$tmpdir" >/dev/null
-    if command -v sha256sum >/dev/null 2>&1; then
-      sha256sum --check "$checksum"
-    else
-      shasum -a 256 --check "$checksum"
-    fi
-  popd >/dev/null
+  if command -v sha256sum >/dev/null 2>&1; then
+    (cd "$tmpdir" && sha256sum --check "$checksum") || exit $?
+  else
+    (cd "$tmpdir" && shasum -a 256 --check "$checksum") || exit $?
+  fi
 
   echo "Extracting..."
-  tar -C "$tmpdir" -xzf "$tmpdir/$archive"
+  tar -C "$tmpdir" -xzf "$tmpdir/$archive" || exit $?
 
-  mkdir -p "$CURRENT_DIR/bin"
+  mkdir -p "$CURRENT_DIR/bin" || exit $?
+  install_tmp_to_clean="$(mktemp "$CURRENT_DIR/bin/.tmux-fingers-rs.XXXXXX")" || exit $?
   cp "$tmpdir/tmux-fingers-rs-${tag}-${target}/tmux-fingers-rs" \
-     "$CURRENT_DIR/bin/tmux-fingers-rs"
-  chmod a+x "$CURRENT_DIR/bin/tmux-fingers-rs"
+     "$install_tmp_to_clean" || exit $?
+  chmod a+x "$install_tmp_to_clean" || exit $?
+  mv -f "$install_tmp_to_clean" "$CURRENT_DIR/bin/tmux-fingers-rs" || exit $?
+  install_tmp_to_clean=""
 
-  rm -rf "$tmpdir"
+  rm -rf "$tmpdir" || exit $?
+  tmpdir_to_clean=""
 
   echo
   echo "Installed: $CURRENT_DIR/bin/tmux-fingers-rs"
@@ -176,7 +207,11 @@ function install_from_crates() {
   echo
   require_cargo || exit 1
   WIZARD_INSTALLATION_METHOD=cargo-install \
-    cargo install --locked tmux-fingers-rs
+    cargo install --locked tmux-fingers-rs || exit $?
+  if [[ -e "$CURRENT_DIR/bin/tmux-fingers-rs" ]]; then
+    rm -f "$CURRENT_DIR/bin/tmux-fingers-rs" || exit $?
+    echo "Removed the plugin-local binary so the new PATH installation is used."
+  fi
   echo
   echo "Installed. Make sure ~/.cargo/bin is on your \$PATH."
   exit 0
@@ -187,7 +222,11 @@ function install_from_source() {
   echo
   require_cargo || exit 1
   WIZARD_INSTALLATION_METHOD=cargo-install \
-    cargo install --locked --path "$CURRENT_DIR"
+    cargo install --locked --path "$CURRENT_DIR" || exit $?
+  if [[ -e "$CURRENT_DIR/bin/tmux-fingers-rs" ]]; then
+    rm -f "$CURRENT_DIR/bin/tmux-fingers-rs" || exit $?
+    echo "Removed the plugin-local binary so the new PATH installation is used."
+  fi
   echo
   echo "Installed. Make sure ~/.cargo/bin is on your \$PATH."
   exit 0
@@ -198,14 +237,15 @@ function build_local() {
   echo
   require_cargo || exit 1
 
-  pushd "$CURRENT_DIR" > /dev/null
-    WIZARD_INSTALLATION_METHOD=build-from-source \
-      cargo build --release
-  popd > /dev/null
+  (cd "$CURRENT_DIR" && WIZARD_INSTALLATION_METHOD=build-from-source \
+    cargo build --release) || exit $?
 
-  mkdir -p "$CURRENT_DIR/bin"
-  cp "$CURRENT_DIR/target/release/tmux-fingers-rs" "$CURRENT_DIR/bin/tmux-fingers-rs"
-  chmod a+x "$CURRENT_DIR/bin/tmux-fingers-rs"
+  mkdir -p "$CURRENT_DIR/bin" || exit $?
+  install_tmp_to_clean="$(mktemp "$CURRENT_DIR/bin/.tmux-fingers-rs.XXXXXX")" || exit $?
+  cp "$CURRENT_DIR/target/release/tmux-fingers-rs" "$install_tmp_to_clean" || exit $?
+  chmod a+x "$install_tmp_to_clean" || exit $?
+  mv -f "$install_tmp_to_clean" "$CURRENT_DIR/bin/tmux-fingers-rs" || exit $?
+  install_tmp_to_clean=""
 
   echo
   echo "Built. Binary copied to: $CURRENT_DIR/bin/tmux-fingers-rs"
@@ -238,17 +278,28 @@ function get_message() {
   fi
 }
 
-tmux display-menu -T "tmux-fingers-rs" \
-  "" \
-  "- " "" "" \
-  "-  #[nodim,bold]Welcome to tmux-fingers-rs ✌️ " "" "" \
-  "- " "" "" \
-  "-  $(get_message) " "" "" \
-  "- " "" "" \
-  "" \
-  "Download prebuilt binary (recommended, no Rust required)" d "new-window \"$CURRENT_DIR/install-wizard.sh download-binary\"" \
-  "Install from crates.io (cargo install tmux-fingers-rs)"   c "new-window \"$CURRENT_DIR/install-wizard.sh install-from-crates\"" \
-  "Build locally into ./bin (TPM-friendly, no global install)" b "new-window \"$CURRENT_DIR/install-wizard.sh build-local\"" \
-  "Install from this checkout (cargo install --path .)"      s "new-window \"$CURRENT_DIR/install-wizard.sh install-from-source\"" \
-  "" \
+wizard="$(shell_quote "$CURRENT_DIR/install-wizard.sh")"
+menu_args=(
+  -T "tmux-fingers-rs"
+  ""
+  "- " "" ""
+  "-  #[nodim,bold]Welcome to tmux-fingers-rs ✌️ " "" ""
+  "- " "" ""
+  "-  $(get_message) " "" ""
+  "- " "" ""
+  ""
+)
+
+if [[ -n "$(detect_target)" ]]; then
+  menu_args+=("Download prebuilt binary (recommended, no Rust required)" d "new-window $(tmux_quote "$wizard download-binary")")
+fi
+
+menu_args+=(
+  "Install from crates.io (cargo install tmux-fingers-rs)" c "new-window $(tmux_quote "$wizard install-from-crates")"
+  "Build locally into ./bin (TPM-friendly, no global install)" b "new-window $(tmux_quote "$wizard build-local")"
+  "Install from this checkout (cargo install --path .)" s "new-window $(tmux_quote "$wizard install-from-source")"
+  ""
   "Exit" q ""
+)
+
+tmux display-menu "${menu_args[@]}"
