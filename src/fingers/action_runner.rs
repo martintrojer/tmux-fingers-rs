@@ -137,7 +137,7 @@ impl ActionRunner {
     fn paste_command(&self) -> String {
         if self.original_pane.pane_in_mode {
             format!(
-                "send-keys -t {} -X cancel ; paste-buffer -t {}",
+                "send-keys -t {} -X cancel \\; paste-buffer -t {}",
                 self.original_pane.pane_id, self.original_pane.pane_id
             )
         } else {
@@ -200,18 +200,43 @@ where
 
 impl ActionRunner {
     fn expanded_match(&self, config: &Config) -> String {
-        if self.action(config).as_deref() == Some(":open:")
-            && self.r#match.starts_with('~')
-            && let Ok(home) = env::var("HOME")
-        {
-            let stripped = self.r#match.trim_start_matches("~/");
-            return PathBuf::from(home)
-                .join(stripped)
-                .to_string_lossy()
-                .into_owned();
+        if self.action(config).as_deref() != Some(":open:") || !self.r#match.starts_with('~') {
+            return self.r#match.clone();
         }
-        self.r#match.clone()
+
+        let path = if let Some(home) = env::home_dir() {
+            if self.r#match == "~" {
+                return home.to_string_lossy().into_owned();
+            }
+            self.r#match
+                .strip_prefix("~/")
+                .map_or_else(|| PathBuf::from(&self.r#match), |path| home.join(path))
+        } else {
+            PathBuf::from(&self.r#match)
+        };
+
+        let path = if path.is_absolute() {
+            path
+        } else {
+            PathBuf::from(&self.original_pane.pane_current_path).join(path)
+        };
+        normalize_path(path).to_string_lossy().into_owned()
     }
+}
+
+fn normalize_path(path: PathBuf) -> PathBuf {
+    use std::path::Component;
+
+    path.components().fold(PathBuf::new(), |mut path, part| {
+        match part {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                path.pop();
+            }
+            _ => path.push(part),
+        }
+        path
+    })
 }
 
 fn command_exists(program: &str) -> bool {
@@ -257,13 +282,40 @@ mod tests {
     }
 
     #[test]
+    fn paste_command_cancels_copy_mode_before_pasting() {
+        let config = Config {
+            main_action: ":paste:".into(),
+            ..Config::default()
+        };
+        let mut runner = runner();
+        runner.original_pane.pane_in_mode = true;
+
+        assert_eq!(
+            runner.final_shell_command(&config).unwrap(),
+            "send-keys -t %1 -X cancel \\; paste-buffer -t %1"
+        );
+    }
+
+    #[test]
     fn expands_home_for_open_action() {
         let config = Config {
             main_action: ":open:".into(),
             ..Config::default()
         };
-        let expanded = runner().expanded_match(&config);
-        assert!(expanded.ends_with("tmp/file.txt"));
+        let home = std::env::home_dir().unwrap();
+        let base = std::path::PathBuf::from(&runner().original_pane.pane_current_path);
+        let mut runner = runner();
+
+        for (input, expected) in [
+            ("~", home.clone()),
+            ("~/tmp/file.txt", home.join("tmp/file.txt")),
+            ("~/~/file.txt", home.join("~/file.txt")),
+            ("~/tmp/../file.txt", home.join("file.txt")),
+            ("~dir/../file.txt", base.join("file.txt")),
+        ] {
+            runner.r#match = input.into();
+            assert_eq!(runner.expanded_match(&config), expected.to_string_lossy());
+        }
     }
 
     #[test]

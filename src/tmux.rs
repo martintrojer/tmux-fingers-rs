@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
 use std::env;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::tmux_style_printer::TmuxStylePrinter;
 
@@ -33,18 +34,28 @@ pub struct TmuxVersion {
     pub patch: u32,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct Tmux {
     version_override: Option<String>,
+    version: Arc<OnceLock<Result<String, String>>>,
+    tmux_command: PathBuf,
     socket_override: Option<String>,
     executed: Arc<Mutex<Vec<String>>>,
     fake_responses: Arc<Mutex<BTreeMap<String, String>>>,
+}
+
+impl Default for Tmux {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Tmux {
     pub fn new() -> Self {
         Self {
             version_override: None,
+            version: Arc::new(OnceLock::new()),
+            tmux_command: "tmux".into(),
             socket_override: env::var("FINGERS_TMUX_SOCKET").ok(),
             executed: Arc::new(Mutex::new(Vec::new())),
             fake_responses: Arc::new(Mutex::new(BTreeMap::new())),
@@ -52,9 +63,18 @@ impl Tmux {
     }
 
     #[cfg(test)]
+    fn with_command(command: impl Into<PathBuf>) -> Self {
+        let mut tmux = Self::new();
+        tmux.tmux_command = command.into();
+        tmux
+    }
+
+    #[cfg(test)]
     pub fn fake(version: &str) -> Self {
         Self {
             version_override: Some(version.to_string()),
+            version: Arc::new(OnceLock::new()),
+            tmux_command: "tmux".into(),
             socket_override: None,
             executed: Arc::new(Mutex::new(Vec::new())),
             fake_responses: Arc::new(Mutex::new(BTreeMap::new())),
@@ -68,6 +88,8 @@ impl Tmux {
     ) -> Self {
         Self {
             version_override: Some(version.to_string()),
+            version: Arc::new(OnceLock::new()),
+            tmux_command: "tmux".into(),
             socket_override: None,
             executed: Arc::new(Mutex::new(Vec::new())),
             fake_responses: Arc::new(Mutex::new(responses.into_iter().collect())),
@@ -87,7 +109,7 @@ impl Tmux {
         }
 
         let output = Command::new("/bin/sh")
-            .arg("-lc")
+            .arg("-c")
             .arg(format!("tmux{} {cmd}", self.socket_flag()))
             .output()
             .map_err(|err| err.to_string())?;
@@ -118,22 +140,26 @@ impl Tmux {
     }
 
     pub fn version_string(&self) -> Result<String, String> {
-        if let Some(version) = &self.version_override {
-            return Ok(version.clone());
-        }
-        let output = Command::new("tmux")
-            .args(self.socket_args())
-            .arg("-V")
-            .output()
-            .map_err(|err| err.to_string())?;
-        if !output.status.success() {
-            return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
-        }
-        Ok(String::from_utf8_lossy(&output.stdout)
-            .split_whitespace()
-            .last()
-            .unwrap_or_default()
-            .to_string())
+        self.version
+            .get_or_init(|| {
+                if let Some(version) = &self.version_override {
+                    return Ok(version.clone());
+                }
+                let output = Command::new(&self.tmux_command)
+                    .args(self.socket_args())
+                    .arg("-V")
+                    .output()
+                    .map_err(|err| err.to_string())?;
+                if !output.status.success() {
+                    return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+                }
+                Ok(String::from_utf8_lossy(&output.stdout)
+                    .split_whitespace()
+                    .last()
+                    .unwrap_or_default()
+                    .to_string())
+            })
+            .clone()
     }
 
     pub fn show_option(&self, option: &str) -> Result<String, String> {
@@ -156,7 +182,7 @@ impl Tmux {
                 .collect());
         }
         let output = Command::new("/bin/sh")
-            .arg("-lc")
+            .arg("-c")
             .arg(format!(
                 "tmux{} show-options -g | grep ^@fingers",
                 self.socket_flag()
@@ -193,7 +219,7 @@ impl Tmux {
         }
         args.push("-".to_string());
 
-        let mut child = Command::new("tmux")
+        let mut child = Command::new(&self.tmux_command)
             .args(self.socket_args())
             .args(&args)
             .stdin(Stdio::piped())
@@ -344,7 +370,7 @@ impl Tmux {
 
     pub fn find_pane_by_id(&self, id: &str) -> Result<Option<Pane>, String> {
         let output = self.exec(&format!(
-            "display-message -t {} -F '#{{pane_id}};#{{window_id}};#{{pane_width}};#{{pane_height}};#{{pane_current_path}};#{{?pane_in_mode,true,false}};#{{?scroll_position,#{{scroll_position}},}};#{{?window_zoomed_flag,true,false}}' -p",
+            "display-message -t {} -F '#{{pane_id}};#{{window_id}};#{{pane_width}};#{{pane_height}};#{{?pane_in_mode,true,false}};#{{?scroll_position,#{{scroll_position}},}};#{{?window_zoomed_flag,true,false}};#{{pane_current_path}}' -p",
             shell_words::quote(id)
         ))?;
         if output.trim().is_empty() {
@@ -355,7 +381,7 @@ impl Tmux {
 
     pub fn list_panes(&self, filter: &str, target: &str) -> Result<Vec<Pane>, String> {
         let output = self.exec(&format!(
-            "list-panes -F '#{{pane_id}};#{{window_id}};#{{pane_width}};#{{pane_height}};#{{pane_current_path}};#{{?pane_in_mode,true,false}};#{{?scroll_position,#{{scroll_position}},}};#{{?window_zoomed_flag,true,false}}' -t {} -f {}",
+            "list-panes -F '#{{pane_id}};#{{window_id}};#{{pane_width}};#{{pane_height}};#{{?pane_in_mode,true,false}};#{{?scroll_position,#{{scroll_position}},}};#{{?window_zoomed_flag,true,false}};#{{pane_current_path}}' -t {} -f {}",
             shell_words::quote(target),
             shell_words::quote(filter)
         ))?;
@@ -420,7 +446,7 @@ fn take_number(bytes: &[u8], start: usize) -> Option<(u32, usize)> {
 }
 
 fn parse_pane(input: &str) -> Result<Pane, String> {
-    let parts = input.trim_end().split(';').collect::<Vec<_>>();
+    let parts = input.trim_end().splitn(8, ';').collect::<Vec<_>>();
     if parts.len() != 8 {
         return Err(format!("Invalid pane output: {input}"));
     }
@@ -433,18 +459,18 @@ fn parse_pane(input: &str) -> Result<Pane, String> {
         pane_height: parts[3]
             .parse()
             .map_err(|_| format!("Invalid pane height: {input}"))?,
-        pane_current_path: parts[4].to_string(),
-        pane_in_mode: parts[5] == "true",
-        scroll_position: if parts[6].is_empty() {
+        pane_current_path: parts[7].to_string(),
+        pane_in_mode: parts[4] == "true",
+        scroll_position: if parts[5].is_empty() {
             None
         } else {
             Some(
-                parts[6]
+                parts[5]
                     .parse()
                     .map_err(|_| format!("Invalid scroll position: {input}"))?,
             )
         },
-        window_zoomed_flag: parts[7] == "true",
+        window_zoomed_flag: parts[6] == "true",
     })
 }
 
@@ -468,7 +494,61 @@ fn parse_window(input: &str) -> Result<Window, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::tmux_version_to_semver;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::{Tmux, parse_pane, tmux_version_to_semver};
+
+    #[test]
+    fn caches_successful_and_failed_version_lookups() {
+        for (exit_status, expected) in [(0, Ok("3.3a")), (1, Err("version failed"))] {
+            let dir = std::env::temp_dir().join(format!(
+                "tmux-fingers-version-test-{}-{exit_status}",
+                std::process::id()
+            ));
+            fs::create_dir_all(&dir).unwrap();
+            let script = dir.join("tmux");
+            let count = dir.join("count");
+            fs::write(
+                &script,
+                format!(
+                    "#!/bin/sh\necho x >> '{}'\necho '{}' {}\nexit {exit_status}\n",
+                    count.display(),
+                    if exit_status == 0 {
+                        "tmux 3.3a"
+                    } else {
+                        "version failed"
+                    },
+                    if exit_status == 0 { "" } else { ">&2" },
+                ),
+            )
+            .unwrap();
+            fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+            let tmux = Tmux::with_command(&script);
+
+            assert_eq!(
+                tmux.version_string().as_deref().map_err(String::as_str),
+                expected
+            );
+            assert_eq!(
+                tmux.version_string().as_deref().map_err(String::as_str),
+                expected
+            );
+            assert_eq!(fs::read_to_string(&count).unwrap().lines().count(), 1);
+
+            fs::remove_dir_all(dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn parses_pane_paths_containing_semicolons() {
+        let pane = parse_pane("%1;@1;80;24;false;;false;/tmp/a;b").unwrap();
+
+        assert_eq!(pane.pane_current_path, "/tmp/a;b");
+        assert!(!pane.pane_in_mode);
+        assert_eq!(pane.scroll_position, None);
+        assert!(!pane.window_zoomed_flag);
+    }
 
     #[test]
     fn parses_plain_versions() {

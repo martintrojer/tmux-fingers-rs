@@ -575,11 +575,11 @@ mod tests {
 
     #[test]
     fn parses_explicit_pane_ids() {
-        let pane_response = "%1;@1;80;24;/tmp;false;;false".to_string();
+        let pane_response = "%1;@1;80;24;false;;false;/tmp".to_string();
         let tmux = crate::tmux::Tmux::fake_with_responses(
             "3.3a",
             [(
-                "display-message -t '%1' -F '#{pane_id};#{window_id};#{pane_width};#{pane_height};#{pane_current_path};#{?pane_in_mode,true,false};#{?scroll_position,#{scroll_position},};#{?window_zoomed_flag,true,false}' -p".to_string(),
+                "display-message -t '%1' -F '#{pane_id};#{window_id};#{pane_width};#{pane_height};#{?pane_in_mode,true,false};#{?scroll_position,#{scroll_position},};#{?window_zoomed_flag,true,false};#{pane_current_path}' -p".to_string(),
                 pane_response,
             )],
         );
@@ -597,12 +597,12 @@ mod tests {
                 "%2".to_string(),
             ),
             (
-                "display-message -t '%2' -F '#{pane_id};#{window_id};#{pane_width};#{pane_height};#{pane_current_path};#{?pane_in_mode,true,false};#{?scroll_position,#{scroll_position},};#{?window_zoomed_flag,true,false}' -p".to_string(),
-                "%2;@9;90;30;/tmp;false;;false".to_string(),
+                "display-message -t '%2' -F '#{pane_id};#{window_id};#{pane_width};#{pane_height};#{?pane_in_mode,true,false};#{?scroll_position,#{scroll_position},};#{?window_zoomed_flag,true,false};#{pane_current_path}' -p".to_string(),
+                "%2;@9;90;30;false;;false;/tmp".to_string(),
             ),
             (
-                "list-panes -F '#{pane_id};#{window_id};#{pane_width};#{pane_height};#{pane_current_path};#{?pane_in_mode,true,false};#{?scroll_position,#{scroll_position},};#{?window_zoomed_flag,true,false}' -t @9 -f '#{pane_active}'".to_string(),
-                "%3;@9;90;30;/work;false;;false".to_string(),
+                "list-panes -F '#{pane_id};#{window_id};#{pane_width};#{pane_height};#{?pane_in_mode,true,false};#{?scroll_position,#{scroll_position},};#{?window_zoomed_flag,true,false};#{pane_current_path}' -t @9 -f '#{pane_active}'".to_string(),
+                "%3;@9;90;30;false;;false;/work".to_string(),
             ),
         ];
         let tmux = crate::tmux::Tmux::fake_with_responses("3.3a", responses);

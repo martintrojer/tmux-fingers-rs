@@ -251,6 +251,83 @@ fn load_config_and_start_work_against_live_tmux() {
 }
 
 #[test]
+fn echoing_login_profile_does_not_break_load_config_or_start() {
+    let socket = unique_name("tmux-fingers-rs");
+    let session = unique_name("session");
+    let state_home = short_state_home();
+    let home = state_home.join("home");
+    fs::create_dir_all(&home).unwrap();
+    fs::write(home.join(".profile"), "echo hello-from-profile\n").unwrap();
+
+    setup_server(&socket, &session, "printf '12345\n'; exec cat");
+    let client = attach_control_client(&socket, &session);
+    thread::sleep(Duration::from_millis(200));
+
+    tmux(
+        &socket,
+        &[
+            "set-option",
+            "-g",
+            "@fingers-enabled-builtin-patterns",
+            "digit",
+        ],
+    );
+    tmux(
+        &socket,
+        &["set-option", "-g", "@fingers-use-system-clipboard", "0"],
+    );
+    tmux(
+        &socket,
+        &["set-option", "-g", "@fingers-show-copied-notification", "0"],
+    );
+
+    let bin = binary();
+    let load = fingers(&bin, &state_home, &socket)
+        .env("HOME", &home)
+        .arg("load-config")
+        .output()
+        .expect("run load-config");
+    assert!(
+        load.status.success(),
+        "{}",
+        String::from_utf8_lossy(&load.stderr)
+    );
+
+    let pane_id = tmux(
+        &socket,
+        &[
+            "display-message",
+            "-p",
+            "-t",
+            &format!("{session}:0.0"),
+            "#{pane_id}",
+        ],
+    );
+    let mut start = KillOnDrop(
+        fingers(&bin, &state_home, &socket)
+            .env("HOME", &home)
+            .args(["start", &pane_id])
+            .spawn()
+            .expect("spawn binary"),
+    );
+    wait_for_socket(&socket_path(&state_home));
+
+    let send = fingers(&bin, &state_home, &socket)
+        .args(["send-input", "hint:b:main"])
+        .output()
+        .expect("run send-input");
+    assert!(
+        send.status.success(),
+        "{}",
+        String::from_utf8_lossy(&send.stderr)
+    );
+    assert!(start.wait().expect("wait for start").success());
+    assert_eq!(tmux(&socket, &["show-buffer"]), "12345");
+
+    cleanup(&socket, client, &state_home);
+}
+
+#[test]
 fn multimode_selects_multiple_matches() {
     let socket = unique_name("tmux-fingers-rs");
     let session = unique_name("session");
@@ -516,6 +593,81 @@ fn paste_action_pastes_match_into_pane() {
     );
     let socket_path = socket_path(&state_home);
     wait_for_socket(&socket_path);
+
+    let send = fingers(&bin, &state_home, &socket)
+        .args(["send-input", "hint:b:main"])
+        .output()
+        .expect("run send-input");
+    assert!(
+        send.status.success(),
+        "{}",
+        String::from_utf8_lossy(&send.stderr)
+    );
+
+    assert!(start.wait().expect("wait for start").success());
+    thread::sleep(Duration::from_millis(100));
+    let pane_text = tmux(
+        &socket,
+        &["capture-pane", "-p", "-t", &format!("{session}:0.0")],
+    );
+    assert!(
+        pane_text.contains("12345\n12345"),
+        "pane_text={pane_text:?}"
+    );
+
+    cleanup(&socket, client, &state_home);
+}
+
+#[test]
+fn paste_action_cancels_copy_mode_before_pasting() {
+    let socket = unique_name("tmux-fingers-rs");
+    let session = unique_name("session");
+    let state_home = short_state_home();
+    fs::create_dir_all(&state_home).unwrap();
+
+    setup_server(&socket, &session, "printf '12345\n'; exec cat");
+    let client = attach_control_client(&socket, &session);
+    thread::sleep(Duration::from_millis(200));
+
+    tmux(
+        &socket,
+        &[
+            "set-option",
+            "-g",
+            "@fingers-enabled-builtin-patterns",
+            "digit",
+        ],
+    );
+    tmux(
+        &socket,
+        &["set-option", "-g", "@fingers-use-system-clipboard", "0"],
+    );
+    tmux(
+        &socket,
+        &["set-option", "-g", "@fingers-show-copied-notification", "0"],
+    );
+
+    let bin = binary();
+    run_load_config(&bin, &state_home, &socket);
+
+    let pane_id = tmux(
+        &socket,
+        &[
+            "display-message",
+            "-p",
+            "-t",
+            &format!("{session}:0.0"),
+            "#{pane_id}",
+        ],
+    );
+    tmux(&socket, &["copy-mode", "-t", &pane_id]);
+    let mut start = spawn_binary(
+        &bin,
+        &state_home,
+        &socket,
+        &["start", "--main-action", ":paste:", &pane_id],
+    );
+    wait_for_socket(&socket_path(&state_home));
 
     let send = fingers(&bin, &state_home, &socket)
         .args(["send-input", "hint:b:main"])
