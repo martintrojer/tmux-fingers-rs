@@ -24,6 +24,8 @@ confirm presence and equivalence.
 | Built-in regex patterns (`ip`, `uuid`, `sha`, `digit`, `url`, `path`, `hex`, `kubernetes`, `kubernetes-pod`, `git-status`, `git-status-branch`, `diff`) | ✅ identical (12 patterns, incl. 2.7.0's `kubernetes-pod`) |
 | Style rendering (`TmuxStylePrinter`) | ✅ emits SGR sequences directly; no `tput` subprocess (upstream 2.7.0) |
 | Config validation (`@fingers-*` values) | ⚠ accepts more input in two cases and rejects invalid combined pattern sets (see below) |
+| Render error handling | ⚠ `start` reports render errors and exits non-zero; upstream rescues them and exits successfully |
+| Plugin binary lookup | ⚠ prefers `<plugin>/bin` over `$PATH`; upstream checks `$PATH` first |
 | Action error reporting | ✅ failures are reported, not fatal (upstream 2.7.1) |
 | Keyboard layouts (`qwerty`, `azerty`, `qwertz`, `dvorak`, `colemak`, plus `*-homerow` / `*-left-hand` / `*-right-hand` variants) | ✅ identical |
 | Action semantics (`:copy:`, `:open:`, `:paste:`, custom shell actions) | ✅ matches upstream |
@@ -85,6 +87,24 @@ Crystal compiler version. To restore parity we'd capture `rustc
 --version` at build time via a `build.rs` that emits `cargo:rustc-env=`,
 and read it back with `env!`. Not worth the build complexity yet.
 
+## Deliberate deviations
+
+### Render errors are returned with a non-zero exit status
+
+This port returns render errors from `start` and exits non-zero. Upstream
+rescues errors from its hinter, writes them to its log, and requests an
+otherwise successful exit. Returning the error tells callers that the
+render failed instead of reporting success.
+
+### The plugin entrypoint prefers its local `bin/` directory
+
+`tmux-fingers-rs.tmux` checks `<plugin>/bin/tmux-fingers-rs` before it
+checks `$PATH`. Upstream checks `$PATH` first. The install wizard manages
+the local binary, so local-first lookup prevents an unrelated global
+installation from shadowing the binary selected for that plugin
+checkout. After a successful install, the wizard's `$PATH`-based methods
+remove the local binary so that the new installation takes effect.
+
 ## Out of scope
 
 ### WSL clipboard via `clip.exe`
@@ -140,11 +160,11 @@ its flat `match` but performs the equivalent checks. Known deviations:
    this to test user patterns in isolation.
 2. **Whitespace around commas is trimmed.** `"ip, diff"` is a config
    error upstream and is accepted here. This only widens what loads.
-3. **Combined pattern sets are validated.** Both implementations
-   validate each pattern alone. This port also rejects a set that PCRE2
-   cannot compile after the patterns are combined, and names the user
-   pattern that caused the failure. Upstream can accept such a set and
-   fail when fingers mode starts.
+3. **`load-config` validates combined pattern sets.** Both
+   implementations validate each pattern alone. This port also rejects
+   a set that PCRE2 cannot compile after the patterns are combined, and
+   names the failing `@fingers-pattern-N` when it can identify one.
+   Upstream can accept such a set and fail when fingers mode starts.
 
 Unknown `@fingers-*` options are reported but not unset. This matches
 upstream `b43b51f`.
