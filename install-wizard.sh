@@ -117,6 +117,17 @@ function download_to() {
   esac
 }
 
+function expected_sha256() {
+  local checksum="$1"
+  local archive="$2"
+  awk -v archive="$archive" '
+    NR != 1 { exit 1 }
+    NF != 2 || $2 != archive || length($1) != 64 || $1 ~ /[^0-9A-Fa-f]/ { exit 1 }
+    { print tolower($1) }
+    END { if (NR != 1) exit 1 }
+  ' "$checksum"
+}
+
 function read_cargo_version() {
   if [[ ! -f "$CURRENT_DIR/Cargo.toml" ]]; then
     echo ""
@@ -176,11 +187,17 @@ function download_binary() {
   download_to "$base/$checksum" "$tmpdir/$checksum" || exit $?
 
   echo "Verifying SHA256..."
+  local expected actual
+  expected="$(expected_sha256 "$tmpdir/$checksum" "$archive")" || exit $?
   if command -v sha256sum >/dev/null 2>&1; then
-    (cd "$tmpdir" && sha256sum --check "$checksum") || exit $?
+    actual="$(sha256sum "$tmpdir/$archive")" || exit $?
   else
-    (cd "$tmpdir" && shasum -a 256 --check "$checksum") || exit $?
+    actual="$(shasum -a 256 "$tmpdir/$archive")" || exit $?
   fi
+  actual="${actual%%[[:space:]]*}"
+  [[ "$actual" =~ ^[[:xdigit:]]{64}$ ]] || exit 1
+  actual="$(printf '%s\n' "$actual" | tr '[:upper:]' '[:lower:]')" || exit $?
+  [[ "$actual" == "$expected" ]] || exit 1
 
   echo "Extracting..."
   tar -C "$tmpdir" -xzf "$tmpdir/$archive" || exit $?
