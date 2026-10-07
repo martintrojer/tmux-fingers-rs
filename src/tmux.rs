@@ -388,10 +388,11 @@ pub fn tmux_version_to_semver(input: &str) -> Result<TmuxVersion, String> {
     let bytes = input.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i].is_ascii_digit() && bytes[i] != b'0' {
-            if let Some((version, _)) = try_parse_at(bytes, i) {
-                return Ok(version);
-            }
+        if bytes[i].is_ascii_digit()
+            && bytes[i] != b'0'
+            && let Some((version, _)) = try_parse_at(bytes, i)
+        {
+            return Ok(version);
         }
         i += 1;
     }

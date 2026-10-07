@@ -465,13 +465,12 @@ impl CleanupState {
     fn run(self) -> Result<(), String> {
         let mut errors = Vec::new();
 
-        if self.swapped {
-            if let Err(err) = self
+        if self.swapped
+            && let Err(err) = self
                 .tmux
                 .swap_panes(&self.fingers_pane_id, &self.target_pane_id)
-            {
-                errors.push(err);
-            }
+        {
+            errors.push(err);
         }
         if let Err(err) = self.tmux.kill_pane(&self.fingers_pane_id) {
             errors.push(err);

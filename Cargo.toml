@@ -9,7 +9,7 @@ homepage = "https://github.com/martintrojer/tmux-fingers-rs"
 readme = "README.md"
 keywords = ["tmux", "tmux-plugin", "clipboard", "hints", "vimium"]
 categories = ["command-line-utilities"]
-rust-version = "1.85"
+rust-version = "1.88"
 
 [[bin]]
 name = "tmux-fingers-rs"

@@ -86,6 +86,3 @@ The full workflow is documented in the README under "Tracking upstream".
 
 - Match upstream `info` output more closely.
 - Add live coverage for `:open:`.
-- Document release/static-build process for `cargo install` and TPM
-  consumers.
-- Add a release workflow under `.github/workflows/` (currently CI-only).

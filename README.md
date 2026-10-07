@@ -54,9 +54,11 @@ Grab the appropriate `.tar.gz` from the
 - `tmux-fingers-rs-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz` — Linux x86_64
 - `tmux-fingers-rs-vX.Y.Z-aarch64-apple-darwin.tar.gz` — Apple Silicon macOS
 
-Verify, extract, and put the binary on your `$PATH`:
+Download the matching `.sha256` file, verify the archive, extract it,
+and put the binary on your `$PATH`:
 
 ```sh
+shasum -a 256 -c tmux-fingers-rs-*.tar.gz.sha256
 tar -xzf tmux-fingers-rs-*.tar.gz
 sudo install tmux-fingers-rs-*/tmux-fingers-rs /usr/local/bin/
 ```
@@ -77,9 +79,12 @@ Requires [Rust / cargo](https://rustup.rs):
 cargo install tmux-fingers-rs
 ```
 
-Then add the plugin entrypoint to your `~/.tmux.conf` manually (or use
-TPM as above; the binary on `$PATH` will be used and the wizard will
-not run).
+Then add the plugin entrypoint to your `~/.tmux.conf` manually, or use
+TPM as above. The plugin uses a binary in its local `bin/` directory
+before a binary on `$PATH`. If no local binary exists, it uses the
+`$PATH` binary. The update wizard opens when that binary's version does
+not match the version in the plugin checkout. Set
+`@fingers-skip-wizard 1` to suppress the version check.
 
 ### Option D — Manual / from source
 
@@ -102,6 +107,11 @@ run-shell ~/.tmux/plugins/tmux-fingers-rs/tmux-fingers-rs.tmux
 
 ## Usage
 
+Press <kbd>prefix</kbd> + <kbd>F</kbd> to enter fingers mode. Press
+<kbd>prefix</kbd> + <kbd>J</kbd> to enter jump mode and move the cursor
+to a match in tmux copy mode. Set `@fingers-key` or
+`@fingers-jump-key` to change these bindings.
+
 While in fingers mode:
 
 | Keys | Action |
@@ -116,12 +126,9 @@ While in fingers mode:
 Configuration uses tmux options of the form `@fingers-*`. The option
 names are unchanged from upstream; see the
 [upstream README](https://github.com/Morantron/tmux-fingers#configuration)
-for the full list.
-
-> **Compatibility note.** Behavior is intended to match upstream; a
-> hand-audited list of known differences (and confirmed non-differences)
-> lives in [`docs/gaps-vs-upstream.md`](./docs/gaps-vs-upstream.md). File
-> an issue if you hit a difference not listed there.
+for the full list. See the [port comparison](docs/gaps-vs-upstream.md)
+for the complete builtin-pattern list, including `kubernetes-pod`, and
+for this port's config-validation differences.
 
 ---
 
@@ -129,8 +136,9 @@ for the full list.
 
 - tmux 3.0 or newer
 - For prebuilt binaries: nothing else (Linux x86_64 or Apple Silicon macOS).
-- For building from source / `cargo install`: Rust 1.95+ (pinned via
-  `rust-toolchain.toml`).
+- For building from source or using `cargo install`: Rust 1.88 or newer.
+  `rust-toolchain.toml` pins Rust 1.95.0 for development and CI, but the
+  crate's minimum supported Rust version is 1.88.
 
 ---
 

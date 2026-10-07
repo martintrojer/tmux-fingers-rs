@@ -265,13 +265,13 @@ fn expand_tabs(line: &str, tab_positions: &[usize]) -> String {
     let mut result = String::new();
 
     for ch in line.chars() {
-        if ch == '\t' {
-            if let Some(position) = positions.next() {
-                let spaces = 8 - ((position + correction) % 8);
-                result.push_str(&" ".repeat(spaces));
-                correction += spaces - 1;
-                continue;
-            }
+        if ch == '\t'
+            && let Some(position) = positions.next()
+        {
+            let spaces = 8 - ((position + correction) % 8);
+            result.push_str(&" ".repeat(spaces));
+            correction += spaces - 1;
+            continue;
         }
         result.push(ch);
     }

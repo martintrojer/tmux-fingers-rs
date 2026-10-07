@@ -23,15 +23,15 @@ confirm presence and equivalence.
 | `@fingers-*` configuration keys | ✅ identical (21 keys) |
 | Built-in regex patterns (`ip`, `uuid`, `sha`, `digit`, `url`, `path`, `hex`, `kubernetes`, `kubernetes-pod`, `git-status`, `git-status-branch`, `diff`) | ✅ identical (12 patterns, incl. 2.7.0's `kubernetes-pod`) |
 | Style rendering (`TmuxStylePrinter`) | ✅ emits SGR sequences directly; no `tput` subprocess (upstream 2.7.0) |
-| Config validation (`@fingers-*` values) | ⚠ stricter than upstream in two places (see below) |
+| Config validation (`@fingers-*` values) | ⚠ accepts more input in two cases and rejects invalid combined pattern sets (see below) |
 | Action error reporting | ✅ failures are reported, not fatal (upstream 2.7.1) |
 | Keyboard layouts (`qwerty`, `azerty`, `qwertz`, `dvorak`, `colemak`, plus `*-homerow` / `*-left-hand` / `*-right-hand` variants) | ✅ identical |
-| Action semantics (`:copy:`, `:open:`, `:paste:`, custom shell actions) | ⚠ one platform-specific bug (see below) |
+| Action semantics (`:copy:`, `:open:`, `:paste:`, custom shell actions) | ✅ matches upstream |
 | Multi-mode | ✅ |
 | Jump mode (cursor positioning via copy-mode) | ✅ |
 | State preservation (`prefix`, `prefix2`, last key table, last pane) | ✅ |
 | `Copied: ...` notification | ✅ |
-| `info` command output format | ❌ different format and one missing field |
+| `info` command output format | ❌ different format; `rust-version` is hardcoded |
 | `installation-method` reporting | ✅ set by every build path (release workflow + wizard actions) |
 | WSL clipboard via `clip.exe` | 🚫 out of scope (this port does not target Windows / WSL) |
 | `toggle-help` (bound to `?`) | ⚠ no-op in *both* implementations; not actually a gap |
@@ -89,27 +89,11 @@ and read it back with `env!`. Not worth the build complexity yet.
 
 ### WSL clipboard via `clip.exe`
 
-**Symptom under upstream parity:** `system_copy_command_with` returns
-`"clip.exe"` where upstream returns `"cat | clip.exe"`. Without the
-`cat |` shell pipeline (and a shell to run it through), `clip.exe`
-never receives the match on stdin and nothing ends up on the Windows
-clipboard.
-
-**Decision:** this port does not target Windows / WSL. The `clip.exe`
-branch in `system_copy_command_with` is left intact for symmetry with
-upstream, but it is not exercised, not fixed, and not tested. Linux
-(`wl-copy`, `xclip`, `xsel`) and macOS (`pbcopy`,
-`reattach-to-user-namespace`) clipboard backends are the supported set.
-
-**Reconsider if:** a Windows / WSL user shows up and asks. The fix is
-small (run the command through `sh -c` for the `clip.exe` arm, or
-restructure to feed the match directly to `clip.exe`'s stdin without
-the pipeline).
-
-Note that upstream 2.7.0 (`38fe26b`, "fix clipboard integration in WSL")
-changed its own `clip.exe` arm from `"cat | clip.exe"` to `"clip.exe"`.
-This port already emitted plain `"clip.exe"`, so it now matches upstream
-verbatim. The arm remains untested here.
+This port does not target Windows or WSL, and the `clip.exe` branch is
+untested. Upstream 2.7.0 changed its command to plain `clip.exe`, which
+matches this port. Linux (`wl-copy`, `xclip`, and `xsel`) and macOS
+(`pbcopy` and `reattach-to-user-namespace`) are the supported clipboard
+backends.
 
 ## Ported from 2.7.x
 
@@ -155,7 +139,15 @@ its flat `match` but performs the equivalent checks. Known deviations:
    disable every builtin. We accept it. `tests/live_tmux.rs` relies on
    this to test user patterns in isolation.
 2. **Whitespace around commas is trimmed.** `"ip, diff"` is a config
-   error upstream and is accepted here. Only widens what loads.
+   error upstream and is accepted here. This only widens what loads.
+3. **Combined pattern sets are validated.** Both implementations
+   validate each pattern alone. This port also rejects a set that PCRE2
+   cannot compile after the patterns are combined, and names the user
+   pattern that caused the failure. Upstream can accept such a set and
+   fail when fingers mode starts.
+
+Unknown `@fingers-*` options are reported but not unset. This matches
+upstream `b43b51f`.
 
 Boolean options intentionally do **not** deviate: upstream's
 `BoolParser` is `value == "1" || value.downcase == "true"` and declares
@@ -226,11 +218,10 @@ The equivalent scenarios are covered by Rust:
 This port's `Cargo.toml` version tracks the port, not upstream. Porting
 upstream 2.7.1 does **not** imply bumping this crate to 2.7.1.
 
-### Test count
+### Test coverage
 
-Upstream has ~45 spec cases; this port has 47 unit + 10 compliance + 7
-live tmux tests (64 total). The Rust suite covers the same ground plus
-the port-specific concerns (shell quoting, socket paths, teardown).
+The Rust suite covers the upstream behavior plus port-specific concerns,
+including shell quoting, socket paths, and teardown.
 
 ## Refreshing this document
 
@@ -245,11 +236,11 @@ git checkout upstream-crystal && git merge --ff-only upstream/master
 # Re-check the four surfaces:
 # 1. CLI commands
 git show upstream-crystal:src/fingers/cli.cr
-ls $(git ls-tree --name-only upstream-crystal src/fingers/commands/)
+git ls-tree --name-only upstream-crystal src/fingers/commands/
 
 # 2. Config keys — since 2.7.0 these live in options.cr, not config.cr
 git show upstream-crystal:src/fingers/options.cr
-ls $(git ls-tree --name-only upstream-crystal src/fingers/options/parsers/)
+git ls-tree --name-only upstream-crystal src/fingers/options/parsers/
 
 # 3. Built-in patterns — since 2.7.0 these live in constants.cr
 git show upstream-crystal:src/fingers/constants.cr | grep -A 20 BUILTIN_PATTERNS
