@@ -161,62 +161,65 @@ pub fn setup_bindings(tmux: &Tmux, config: &Config) -> Result<(), String> {
 }
 
 fn setup_bindings_with_cli(tmux: &Tmux, config: &Config, cli: &str) -> Result<(), String> {
+    let mut cmds = Vec::new();
     if config.enable_bindings {
-        setup_root_bindings(tmux, config, cli)?;
+        root_bindings(&mut cmds, config, cli);
     }
-    setup_fingers_mode_bindings(tmux, cli)?;
-    tmux.exec(&format!(
+    fingers_mode_bindings(&mut cmds, cli);
+    cmds.push(format!(
         "set-option -g @fingers-cli {}",
         shell_words::quote(cli)
-    ))?;
+    ));
+    // One tmux invocation for all ~110 commands: spawning a shell + tmux client
+    // per bind-key made load-config take ~1s, blocking tmux server startup.
+    tmux.exec_batch(&cmds)?;
     Ok(())
 }
 
-fn setup_root_bindings(tmux: &Tmux, config: &Config, cli: &str) -> Result<(), String> {
+fn root_bindings(cmds: &mut Vec<String>, config: &Config, cli: &str) {
     let log_path = crate::fingers::dirs::log_path().display().to_string();
     let start_command = format!(
         "{} start \"#{{pane_id}}\" >>{} 2>&1",
         shell_words::quote(cli),
         shell_words::quote(&log_path)
     );
-    tmux.exec(&format!(
+    cmds.push(format!(
         "bind-key {} run-shell -b {}",
         shell_words::quote(&config.key),
         shell_words::quote(&start_command)
-    ))?;
+    ));
     let jump_command = format!(
         "{} start --mode jump \"#{{pane_id}}\" >>{} 2>&1",
         shell_words::quote(cli),
         shell_words::quote(&log_path)
     );
-    tmux.exec(&format!(
+    cmds.push(format!(
         "bind-key {} run-shell -b {}",
         shell_words::quote(&config.jump_key),
         shell_words::quote(&jump_command)
-    ))?;
-    Ok(())
+    ));
 }
 
-fn setup_fingers_mode_bindings(tmux: &Tmux, cli: &str) -> Result<(), String> {
+fn fingers_mode_bindings(cmds: &mut Vec<String>, cli: &str) {
     for char_code in b'a'..=b'z' {
         let ch = char::from(char_code);
         if DISALLOWED_CHARS.contains(&ch) {
             continue;
         }
-        fingers_mode_bind(tmux, cli, &ch.to_string(), &format!("hint:{}:main", ch))?;
+        fingers_mode_bind(cmds, cli, &ch.to_string(), &format!("hint:{}:main", ch));
         fingers_mode_bind(
-            tmux,
+            cmds,
             cli,
             &ch.to_uppercase().to_string(),
             &format!("hint:{}:shift", ch),
-        )?;
+        );
         fingers_mode_bind(
-            tmux,
+            cmds,
             cli,
             &format!("C-{}", ch),
             &format!("hint:{}:ctrl", ch),
-        )?;
-        fingers_mode_bind(tmux, cli, &format!("M-{}", ch), &format!("hint:{}:alt", ch))?;
+        );
+        fingers_mode_bind(cmds, cli, &format!("M-{}", ch), &format!("hint:{}:alt", ch));
     }
 
     for (key, command) in [
@@ -229,23 +232,21 @@ fn setup_fingers_mode_bindings(tmux: &Tmux, cli: &str) -> Result<(), String> {
         ("Tab", "toggle-multi-mode"),
         ("Any", "noop"),
     ] {
-        fingers_mode_bind(tmux, cli, key, command)?;
+        fingers_mode_bind(cmds, cli, key, command);
     }
-    Ok(())
 }
 
-fn fingers_mode_bind(tmux: &Tmux, cli: &str, key: &str, command: &str) -> Result<(), String> {
+fn fingers_mode_bind(cmds: &mut Vec<String>, cli: &str, key: &str, command: &str) {
     let input_command = format!(
         "{} send-input {}",
         shell_words::quote(cli),
         shell_words::quote(command)
     );
-    tmux.exec(&format!(
+    cmds.push(format!(
         "bind-key -Tfingers {} run-shell -b {}",
         shell_words::quote(key),
         shell_words::quote(&input_command)
-    ))?;
-    Ok(())
+    ));
 }
 
 fn current_exe_string() -> Result<String, String> {
