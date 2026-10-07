@@ -1,9 +1,8 @@
-use pcre2::bytes::Regex;
-use tmux_fingers_rs::fingers::config::builtin_patterns;
+use tmux_fingers_rs::fingers::{config::builtin_patterns, hinter::compile_pattern};
 
 fn matches_for(pattern_name: &str, input: &str) -> Vec<String> {
     let pattern = builtin_patterns()[pattern_name];
-    let regex = Regex::new(pattern).expect("valid pattern");
+    let regex = compile_pattern(&[pattern.to_string()]).expect("valid pattern");
     regex
         .captures_iter(input.as_bytes())
         .map(|captures| {
@@ -74,6 +73,11 @@ fn matches_digits() {
       bar
     ";
     assert_eq!(matches_for("digit", input), vec!["12345", "67891011"]);
+}
+
+#[test]
+fn matches_digits_around_unicode() {
+    assert_eq!(matches_for("digit", "❯ café 12345 é"), vec!["12345"]);
 }
 
 #[test]
